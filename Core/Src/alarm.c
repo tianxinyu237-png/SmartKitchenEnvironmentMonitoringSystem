@@ -1,4 +1,5 @@
 #include "main.h"
+#include "gpio.h"      /* MOTOR_ON / MOTOR_OFF —— 报警时开 PC7 马达 */
 #include "alarm.h"
 #include "bsp_led.h"
 #include "bsp_beep.h"
@@ -14,8 +15,9 @@ void Alarm_Init(void){
 		s_cur=SYS_NORMAL;
 		s_silenced =0 ;
 		
-		/* 三个灯全灭、蜂鸣器静音、风扇停 */
+		/* 三个灯全灭、蜂鸣器静音、风扇停、马达停 */
 		Fan_Off();            /* ← 新增 */
+		MOTOR_OFF();          /* ← 新增：PC7 马达，上电必须是停的 */
 }
 
 uint8_t Alarm_IsSilenced(void) { return s_silenced; }
@@ -102,6 +104,7 @@ void Alarm_Apply(SysState_t st)
 					Led_BlinkStart(LED_ID_L3, LED_BLINK_MS);
 					s_silenced = 0;
 					Fan_SetSpeed(FAN_SPEED_FULL);   /* ← TODO 9：明火/用电异常 → 全速排风 */
+					MOTOR_ON();                     /* ← 报警：马达一起开（PC7） */
 					break;
 
 						case SYS_WARN:
@@ -110,6 +113,7 @@ void Alarm_Apply(SysState_t st)
 					Led_On(LED_ID_L2);
 					Beep_Stop();
 					Fan_SetSpeed(FAN_SPEED_MID);    /* ← TODO 9：温湿度超限 → 中速换气 */
+					MOTOR_OFF();                    /* ← 预警不开发电机 */
 					break;
 
 						case SYS_NORMAL:
@@ -118,6 +122,7 @@ void Alarm_Apply(SysState_t st)
 					Led_On(LED_ID_L1);
 					Beep_Stop();
 					Fan_Off();                      /* ← TODO 9：正常 → 停转 */
+					MOTOR_OFF();                    /* ← 正常：马达停 */
 					break;
 					}
 

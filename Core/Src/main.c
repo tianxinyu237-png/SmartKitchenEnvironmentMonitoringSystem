@@ -73,11 +73,16 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static uint8_t s_demo_alarm = 0;   /* 1 = KEY3 手动演示报警中（绕过真实状态机）
+                                    *   放文件作用域是因为 main() 主循环和 Ui_Task()
+                                    *   都要看它：主循环决定 Alarm_Apply 传哪个状态，
+                                    *   Ui_Task 决定显示报警码还是读数 */
+
 /**
-  * @brief  显示任务：读按键、翻页、算数值、送数码管。
-  * @note   必须是独立函数 —— 里面用 return 提前退出（报警态覆盖），
-  *         若直接写在 while(1) 里，return 会结束 main 让系统停摆。
-  */
+ * @brief  按键响应 + 数码管上屏。主循环每圈调一次
+ * @note   必须是独立函数 —— 里面用 return 提前退出（报警态覆盖），
+ *         若直接写在 while(1) 里，return 会结束 main 让系统停摆。
+ */
 static void Ui_Task(void)
 {
     /* ---- 状态变量：static 保证跨圈保留，不加就每圈归零 ---- */
@@ -106,10 +111,20 @@ static void Ui_Task(void)
         }
     }
 
-    /* KEY3：静音 ⇄ 报警 来回切（演示用：响→静→响，不用等状态变化）
-     *   ⚠️ 只有 ALARM 态有效，NORMAL/WARN 下按了没反应 */
+    /* KEY3：报警演示 / 静音切换
+     *   ① 没在报警 → 进「演示报警」：灯闪 + 蜂鸣器 + 风扇全速 + 马达开 + 数码管 8888
+     *   ② 演示中    → 退出演示，全部恢复
+     *   ③ 真报警中  → 静音 ⇄ 响 切换（原有功能） */
     if (Key_GetPressEvent(KEY_ID_3)) {
-        Alarm_ToggleSilence();
+        if (s_demo_alarm != 0u) {
+            s_demo_alarm = 0u;               /* 退出演示，主循环会 Alarm_Apply(真实状态) */
+            Beep_Stop();
+        } else if (App_State_Get() == SYS_ALARM) {
+            Alarm_ToggleSilence();           /* 真报警：只切蜂鸣器，灯/风扇/马达继续 */
+        } else {
+            s_demo_alarm = 1u;               /* 进演示：主循环会 Alarm_Apply(SYS_ALARM) */
+            Beep_Stop();                     /* 先把上一声掐掉，让 Alarm_Task 从头响 */
+        }
     }
 
     /* ==================== ② ADMIN 整屏闪烁计时 ==================== */
@@ -124,9 +139,10 @@ static void Ui_Task(void)
     }
 
     /* ==================== ③ 报警态强制显示报警码 ==================== */
-    if (App_State_Get() == SYS_ALARM) {
-        if (App_State_GetReason() == ALARM_POWER) {
-            Smg_ShowNum(8888u);          /* ← 用电异常码：四个 8 */
+    /* s_demo_alarm 也要走这里：演示时状态机是 NORMAL，但画面必须像真报警 */
+    if (s_demo_alarm != 0u || App_State_Get() == SYS_ALARM) {
+        if (s_demo_alarm != 0u || App_State_GetReason() == ALARM_POWER) {
+            Smg_ShowNum(8888u);          /* ← 用电异常码：四个 8（演示也用这个） */
         } else {
             Smg_ShowNum(9999u);          /*   明火报警码：四个 9 */
         }
@@ -257,7 +273,11 @@ int main(void)
     App_State_Task();                    /* 算状态：ALARM > WARN > NORMAL */
 
     /* ==================== ④ 动作执行 ==================== */
-    Alarm_Apply(App_State_Get());        /* 状态变了才动作 */
+    /* s_demo_alarm 时强行传 ALARM，让 Alarm_Apply 走报警分支：
+     *   灯闪 + 蜂鸣器 + 风扇全速 + 马达开。
+     * Alarm_Apply 里有 `if (st == s_cur) return;`，所以只有状态真正
+     * 变化那一圈才动作，不会每圈重复重置。 */
+    Alarm_Apply((s_demo_alarm != 0u) ? SYS_ALARM : App_State_Get());
     Alarm_Task();                        /* 推进闪烁和间歇鸣叫 */
     Led_Task();
     Beep_Task();

@@ -49,7 +49,7 @@ void Power_Task(void)
      *    ⚠️ 顺序容易搞反！所以这里两个都用宏，不写 0/1 */
 
     /* ---- 第二步：换算电压 ---- */
-    v_pin    = (float)raw_volt / ADC_FULL * ADC_VREF;
+    v_pin = (float)raw_volt / ADC_FULL * ADC_VREF;
     /*  ↑ 三个要点：
      *    ① (float) 强转不能省 —— raw_volt 是 uint16_t，不转的话
      *       raw_volt / 4095.0f 会先…… 其实这里因为 4095.0f 是浮点，
