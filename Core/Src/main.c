@@ -83,6 +83,8 @@ static void Ui_Task(void)
     /* ---- 状态变量：static 保证跨圈保留，不加就每圈归零 ---- */
     static uint8_t  s_mode     = 0;      /* 0 = NORMAL   1 = ADMIN */
     static uint8_t  s_page     = 0;      /* 当前页号 */
+    static uint32_t s_t_blink  = 0;      /* ADMIN 模式整屏闪烁计时 */
+    static uint8_t  s_blink_on = 1;      /* 1 = 亮相位  0 = 灭相位 */
 
     float   v;                           /* 本页要显示的物理量 */
     int32_t n;                           /* ×100 后的整数 */
@@ -110,7 +112,18 @@ static void Ui_Task(void)
         Alarm_ToggleSilence();
     }
 
-    /* ==================== ② 报警态强制显示报警码 ==================== */
+    /* ==================== ② ADMIN 整屏闪烁计时 ==================== */
+    /* 500ms 翻转一次 → 1Hz 闪。只在 ADMIN 模式推进，切回 NORMAL 立刻恢复常亮 */
+    if (s_mode == 1u) {
+        if (Tick_Expired(&s_t_blink, 500u)) {
+            s_blink_on = (uint8_t)(s_blink_on ^ 1u);
+        }
+    } else {
+        s_blink_on = 1u;                 /* NORMAL 保持常亮 */
+        s_t_blink  = Tick_Ms();          /* 重置计时，下次进 ADMIN 从头算 */
+    }
+
+    /* ==================== ③ 报警态强制显示报警码 ==================== */
     if (App_State_Get() == SYS_ALARM) {
         if (App_State_GetReason() == ALARM_POWER) {
             Smg_ShowNum(8888u);          /* ← 用电异常码：四个 8 */
@@ -126,44 +139,41 @@ static void Ui_Task(void)
         switch (s_page) {
             case 0:  v = Sht20_GetTemp();       break;   /* 温度：28.43 */
             case 1:  v = Sht20_GetHumi();       break;   /* 湿度：57.60 */
-            case 2:  /* 电压：5.00 → 屏幕上 "▯5.00"（前导零熄灭，不带 0 开头） */
+            case 2:  /* 电压：5.00 → "05.00"，四位全亮（前导 0 保留，不熄灭） */
                      n = (int32_t)(Power_GetVoltage() * 100.0f + 0.5f);
                      if (n < 0)    { n = 0; }
                      if (n > 9999) { n = 9999; }
-                     Smg_ShowDigitsDp((n >= 1000) ? (uint8_t)(n / 1000 % 10) : 0xFFu,
-                                      (uint8_t)(n / 100 % 10),
-                                      (uint8_t)(n / 10 % 10),
-                                      (uint8_t)(n % 10), 1u);
+                     Smg_ShowDp((uint32_t)n, 1u);
                      return;
-            case 3:  /* 电流：直接显示 mA，右对齐 → "▯199"（单位 mA，答辩时说清）
+            case 3:  /* 电流：直接显示 mA → "0199"，四位全亮（单位 mA，答辩时说清）
                       *  ↑ 为什么不显示 A：0.199A 要显示成 "0.20"，得占 4 位且小数点在
                       *    第一位后，Smg_ShowDp 做出来是 "002.0" —— 会被读成 2A，非常危险。
-                      *    显示 mA 只占 3 位，没有歧义 */
+                      *    显示 mA 没有歧义 */
                      n = (int32_t)(Power_GetCurrent() + 0.5f);
-                     if (n < 0)   { n = 0; }
-                     if (n > 999) { n = 999; }
-                     Smg_ShowDigits(0xFFu,
-                                    (n >= 100) ? (uint8_t)(n / 100) : 0xFFu,
-                                    (n >= 10)  ? (uint8_t)(n / 10 % 10) : 0xFFu,
-                                    (uint8_t)(n % 10));
+                     if (n < 0)    { n = 0;    }
+                     if (n > 9999) { n = 9999; }
+                     Smg_ShowNum((uint32_t)n);
                      return;
             default: v = 0.0f;                break;   /* 第 4 页报警码，正常时不显示 */
         }
     }else {
-        /* ---- ADMIN：4 个阈值，左位显示项号，第二位熄灭当分隔符 ---- */
+        /* ---- ADMIN：4 个阈值，完整显示 xx.xx + 整屏 1Hz 闪烁 ---- */
         v = App_State_GetThreshold((ThId_t)s_page);
-        n = (int32_t)(v + 0.5f);             /* 阈值都是整数（35/33/85/80），直接取整 */
-        if (n < 0)  { n = 0;  }
-        if (n > 99) { n = 99; }              /* 只留两位，超了会挤掉项号 */
+        n = (int32_t)(v * 100.0f + 0.5f);    /* 35.0 → 3500 */
+        if (n < 0)    { n = 0;    }
+        if (n > 9999) { n = 9999; }
 
-        Smg_ShowDigits((uint8_t)(s_page + 1u),                   /* 项号 1~4 */
-                       0xFFu,                                    /* 第二位熄灭 = 分隔 */
-                       (n >= 10) ? (uint8_t)(n / 10) : 0xFFu,    /* 十位，<10 时消隐 */
-                       (uint8_t)(n % 10));                       /* 个位 */
-        /*  ↑ 上屏效果：温度上限 35 → "1▯35"、湿度上限 85 → "3▯85"
-         *    和 NORMAL 的 "27.63"（4 位带小数点）在视觉上完全区分得开
-         *    ⚠️ 为什么不显示 "1.35"：小数点看着像测量值的小数点，一样会混 */
-        return;                              /* 已经上屏，跳过下面的换算 */
+        if (s_blink_on == 0u) {
+            Smg_Clear();                     /* 灭相位：整屏熄灭 */
+        } else {
+            Smg_ShowDp((uint32_t)n, 2u);     /* 亮相位：35.00 / 33.00 / 85.00 / 80.00 */
+        }
+        /*  ↑ 为什么用「整屏闪」而不是「熄灭某一位」：
+         *    熄灭一位看起来就是屏幕坏了（"百位不显示"），
+         *    整屏闪烁既能一眼认出是设置模式，四个数字又都完整。
+         *  ↑ 为什么灭相位调 Smg_Clear 而不是显示另一个数：
+         *    显示另一个数会让屏幕像在"数字乱跳"，反而看不出是闪烁。 */
+        return;
     }
 
     /* ==================== ⑤ NORMAL 换算：×100 四舍五入 + 钳位 ==================== */

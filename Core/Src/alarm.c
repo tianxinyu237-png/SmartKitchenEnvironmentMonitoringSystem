@@ -29,11 +29,12 @@ void Alarm_Silence(void)
 
 /* 静音 ⇄ 报警 来回切换（绑 KEY3，演示用）
  *
- * ⚠️ 只有 ALARM 态才有效。非报警时按了不做事 ——
- *    否则会在 NORMAL 态把 s_silenced 拨成 1，虽然下次真报警时
- *    Alarm_Apply 会清 0、表现上看不出问题，但状态是脏的。
+ * 两种情况都管：
+ *   ① 正在报警（ALARM 态）：切 s_silenced，真消音 / 恢复响
+ *   ② 没在报警（NORMAL / WARN）：手动响两声当反馈 —— 答辩时想验证
+ *      蜂鸣器好不好使，不用真去制造一次报警
  *
- * ⚠️ 切回「响」的时候不在这里开蜂鸣器。
+ * ⚠️ 切回「响」的时候不在这里开蜂鸣器（报警态下）。
  *    下一圈 Alarm_Task 看到 s_silenced==0 会自己 Beep_Beep()。
  *    在这里开反而会和 Task 抢，响声乱掉。
  *
@@ -43,14 +44,16 @@ void Alarm_Silence(void)
  *      做了 20ms 去抖，一次按压只产生一个事件） */
 void Alarm_ToggleSilence(void)
 {
-    if (s_cur != SYS_ALARM) {
-        return;                          /* 没在报警，没啥可静音的 */
-    }
     s_silenced = (uint8_t)(s_silenced ^ 1u);
 
     if (s_silenced != 0u) {
         Beep_Stop();                     /* 切到静音：立刻掐掉当前这一声 */
+    } else if (s_cur != SYS_ALARM) {
+        /* 非报警态按了第二次（s_silenced 回到 0）—— 没有 Alarm_Task 会来响，
+         * 所以这里手动补两声，让每次按键都有明确反馈 */
+        Beep_Beep(2u, 150u, 150u);
     }
+    /* 报警态且 s_silenced==0：交给 Alarm_Task 下一圈自动重响，别在这抢 */
 }
 
 
