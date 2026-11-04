@@ -117,28 +117,20 @@ static void Ui_Task(void)
      *   ③ 真报警中  → 静音 ⇄ 响 切换（原有功能） */
     if (Key_GetPressEvent(KEY_ID_3)) {
         if (s_demo_alarm != 0u) {
-            /* ---- 退出演示 ----
-             * ⚠️ 这里必须显式 Fan_Off() + MOTOR_OFF()，不能只靠下一圈
-             *    Alarm_Apply(App_State_Get()) 去关。
-             *    原因：Alarm_Apply 开头有 `if (st == s_cur) return;`，
-             *    而演示期间 s_cur 已经被设成 SYS_ALARM；要是真实状态
-             *    这会儿也是 ALARM（比如电压又跳了），传进去 st==s_cur
-             *    直接返回，风扇和马达就留在报警态不动 —— 表现就是
-             *    「蜂鸣器停了（Beep_Stop 是直接调的），风扇马达还转」。 */
+            /* ---- 退出演示：无条件全停 ----
+             * ⚠️ 这里不再判断 App_State_Get()。上一版加了
+             *    `if (App_State_Get() != SYS_ALARM)` 想"真报警就别硬停"，
+             *    结果只要状态机留在 ALARM 就一次都不停 —— 演示开关
+             *    反而关不掉，最坏的情况。
+             *    退出演示是用户明确的意图，就必须无条件执行。 */
             s_demo_alarm = 0u;
             Beep_Stop();
+            Fan_Off();                       /* 风扇：CCR1 = 0 */
+            MOTOR_OFF();                     /* 马达：PC7 = 低 */
+            Alarm_Reset();                   /* 作废 s_cur，逼下一圈重走分支 */
+
             printf("KEY3 EXIT demo: state=%d fan=%u\r\n",
                    (int)App_State_Get(), (unsigned)Fan_GetSpeed());
-
-            if (App_State_Get() != SYS_ALARM) {   /* 真在报警就别硬停 */
-                Fan_Off();
-                MOTOR_OFF();
-            }
-
-            /* 让 alarm.c 里的 s_cur 归位到真实状态：
-             * 若真实是 NORMAL/WARN，上面已停过，这里会再走一遍（无害）；
-             * 若真实是 ALARM，st==s_cur 返回，硬件保持报警态（正确）。 */
-            Alarm_Apply(App_State_Get());
         } else if (App_State_Get() == SYS_ALARM) {
             Alarm_ToggleSilence();           /* 真报警：只切蜂鸣器，灯/风扇/马达继续 */
         } else {

@@ -20,6 +20,21 @@ void Alarm_Init(void){
 		MOTOR_OFF();          /* ← 新增：PC7 马达，上电必须是停的 */
 }
 
+/* 把状态机内部记录的当前态作废，逼下一圈 Alarm_Apply() 无条件重走分支。
+ *
+ * 为什么需要这个：Alarm_Apply() 开头是 `if (st == s_cur) return;`，
+ * 靠"状态变没变"来决定要不要动硬件。但 s_cur 一旦被错误地留在
+ * SYS_ALARM（比如演示模式把它设过去、之后真实状态也是 ALARM），
+ * 后面所有 Apply 调用都会被这个 early-return 吃掉，风扇马达永远关不掉。
+ *
+ * 塞一个非法值 0xFF 进去，下一圈无论真实状态是什么都会 st != s_cur，
+ * 于是老老实实走一遍分支 —— 该停的停，该开的开。 */
+void Alarm_Reset(void)
+{
+    s_cur      = (SysState_t)0xFF;
+    s_silenced = 0u;
+}
+
 uint8_t Alarm_IsSilenced(void) { return s_silenced; }
 
 /* 强制静音（单向）：置位 + 立刻停蜂鸣器。状态不变，灯照闪 */
