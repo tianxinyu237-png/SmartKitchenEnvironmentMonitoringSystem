@@ -77,6 +77,27 @@ void Smg_ShowDp(uint32_t num, uint8_t dp_pos)
         if (i == dp_pos) s_buf[i] |= 0x80u; /* bit7 = 小数点，|0x80 就点亮它 */
     }
 }
+void Smg_ShowDigitsDp(uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3, uint8_t dp_pos)
+{
+    uint8_t tmp[SMG_DIGITS];
+    uint8_t i;
+
+    tmp[0] = d0; tmp[1] = d1; tmp[2] = d2; tmp[3] = d3;
+
+    for (i = 0; i < SMG_DIGITS; i++) {
+        /* 0~9 查表显示；其它值（约定传 0xFF）这一位写 0x00 = 全灭
+         *  ↑ 必须先判断再查表：SEG[] 只有 10 个元素，
+         *    SEG[0xFF] 会读到数组后面 245 字节的野内存，画面上是乱码 */
+        s_buf[i] = (tmp[i] <= 9u) ? SEG[tmp[i]] : 0x00u;
+        if (i == dp_pos) s_buf[i] |= 0x80u;  /* bit7 = 小数点 */
+    }
+}
+
+void Smg_ShowDigits(uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3)
+{
+    Smg_ShowDigitsDp(d0, d1, d2, d3, SMG_DIGITS);   /* 4 = 不点小数点 */
+}
+
 void Smg_Clear(void)
 {
     uint8_t i;

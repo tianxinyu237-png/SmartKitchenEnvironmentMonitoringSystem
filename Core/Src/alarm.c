@@ -71,26 +71,29 @@ void Alarm_Apply(SysState_t st)
 					
 			switch(st){
 					case SYS_ALARM:
-            Led_Off(LED_ID_L1);
-            Led_Off(LED_ID_L2);
-            Led_BlinkStart(LED_ID_L3, LED_BLINK_MS);    
-            s_silenced = 0;                             
-            break;
-				
-					case SYS_WARN:
-            Led_BlinkStop(LED_ID_L3);    
-            Led_Off(LED_ID_L1);
-            Led_On(LED_ID_L2);           
-            Beep_Stop();                 
-            break;
-				
-					case SYS_NORMAL:
-            Led_BlinkStop(LED_ID_L3);
-            Led_Off(LED_ID_L2);
-            Led_On(LED_ID_L1);         
-            Beep_Stop();
-            break;				
-			}
+					Led_Off(LED_ID_L1);
+					Led_Off(LED_ID_L2);
+					Led_BlinkStart(LED_ID_L3, LED_BLINK_MS);
+					s_silenced = 0;
+					Fan_SetSpeed(FAN_SPEED_FULL);   /* ← TODO 9：明火/用电异常 → 全速排风 */
+					break;
+
+						case SYS_WARN:
+					Led_BlinkStop(LED_ID_L3);
+					Led_Off(LED_ID_L1);
+					Led_On(LED_ID_L2);
+					Beep_Stop();
+					Fan_SetSpeed(FAN_SPEED_MID);    /* ← TODO 9：温湿度超限 → 中速换气 */
+					break;
+
+						case SYS_NORMAL:
+					Led_BlinkStop(LED_ID_L3);
+					Led_Off(LED_ID_L2);
+					Led_On(LED_ID_L1);
+					Beep_Stop();
+					Fan_Off();                      /* ← TODO 9：正常 → 停转 */
+					break;
+					}
 
 		
 

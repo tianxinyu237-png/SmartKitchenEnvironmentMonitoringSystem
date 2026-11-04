@@ -83,8 +83,6 @@ static void Ui_Task(void)
     /* ---- 状态变量：static 保证跨圈保留，不加就每圈归零 ---- */
     static uint8_t  s_mode     = 0;      /* 0 = NORMAL   1 = ADMIN */
     static uint8_t  s_page     = 0;      /* 当前页号 */
-    static uint32_t s_t_blink  = 0;      /* 小数点闪烁计时 */
-    static uint8_t  s_blink_on = 1;      /* 1 = 小数点亮 */
 
     float   v;                           /* 本页要显示的物理量 */
     int32_t n;                           /* ×100 后的整数 */
@@ -111,12 +109,7 @@ static void Ui_Task(void)
         Alarm_Silence();
     }
 
-    /* ==================== ② 小数点闪烁（ADMIN 模式标识）==================== */
-    if (Tick_Expired(&s_t_blink, 500u)) {
-        s_blink_on = (uint8_t)(s_blink_on ^ 1u);
-    }
-
-    /* ==================== ③ 报警态强制显示报警码 ==================== */
+    /* ==================== ② 报警态强制显示报警码 ==================== */
     if (App_State_Get() == SYS_ALARM) {
         if (App_State_GetReason() == ALARM_POWER) {
             Smg_ShowNum(8888u);          /* ← 用电异常码：四个 8 */
@@ -132,34 +125,54 @@ static void Ui_Task(void)
         switch (s_page) {
             case 0:  v = Sht20_GetTemp();       break;   /* 温度：28.43 */
             case 1:  v = Sht20_GetHumi();       break;   /* 湿度：57.60 */
-            case 2:  v = Power_GetVoltage();    break;   /* ← 电压：5.02 */
-            case 3:  v = Power_GetCurrent() / 1000.0f;   /* ← 电流：mA → A */
-                     break;
-            /*  ↑ 为什么 /1000：Power_GetCurrent() 返回 mA，而数码管要显示
-             *    「0.52」这种以 A 为单位的数，×100 后是 52
-             *    如果直接显示 mA（520），屏幕上就是 520，看不出单位
-             *
-             *    ⚠️ 也可以显示 mA（不除 1000），那屏幕显示 520，答辩时说「单位是 mA」
-             *    两种都行，但要统一口径。这里选 A，因为「0.52」更像仪表的读数 */
+            case 2:  /* 电压：5.00 → 屏幕上 "▯5.00"（前导零熄灭，不带 0 开头） */
+                     n = (int32_t)(Power_GetVoltage() * 100.0f + 0.5f);
+                     if (n < 0)    { n = 0; }
+                     if (n > 9999) { n = 9999; }
+                     Smg_ShowDigitsDp((n >= 1000) ? (uint8_t)(n / 1000 % 10) : 0xFFu,
+                                      (uint8_t)(n / 100 % 10),
+                                      (uint8_t)(n / 10 % 10),
+                                      (uint8_t)(n % 10), 1u);
+                     return;
+            case 3:  /* 电流：直接显示 mA，右对齐 → "▯199"（单位 mA，答辩时说清）
+                      *  ↑ 为什么不显示 A：0.199A 要显示成 "0.20"，得占 4 位且小数点在
+                      *    第一位后，Smg_ShowDp 做出来是 "002.0" —— 会被读成 2A，非常危险。
+                      *    显示 mA 只占 3 位，没有歧义 */
+                     n = (int32_t)(Power_GetCurrent() + 0.5f);
+                     if (n < 0)   { n = 0; }
+                     if (n > 999) { n = 999; }
+                     Smg_ShowDigits(0xFFu,
+                                    (n >= 100) ? (uint8_t)(n / 100) : 0xFFu,
+                                    (n >= 10)  ? (uint8_t)(n / 10 % 10) : 0xFFu,
+                                    (uint8_t)(n % 10));
+                     return;
             default: v = 0.0f;                break;   /* 第 4 页报警码，正常时不显示 */
         }
     }else {
-        /* ---- ADMIN：4 个阈值 ---- */
+        /* ---- ADMIN：4 个阈值，左位显示项号，第二位熄灭当分隔符 ---- */
         v = App_State_GetThreshold((ThId_t)s_page);
+        n = (int32_t)(v + 0.5f);             /* 阈值都是整数（35/33/85/80），直接取整 */
+        if (n < 0)  { n = 0;  }
+        if (n > 99) { n = 99; }              /* 只留两位，超了会挤掉项号 */
+
+        Smg_ShowDigits((uint8_t)(s_page + 1u),                   /* 项号 1~4 */
+                       0xFFu,                                    /* 第二位熄灭 = 分隔 */
+                       (n >= 10) ? (uint8_t)(n / 10) : 0xFFu,    /* 十位，<10 时消隐 */
+                       (uint8_t)(n % 10));                       /* 个位 */
+        /*  ↑ 上屏效果：温度上限 35 → "1▯35"、湿度上限 85 → "3▯85"
+         *    和 NORMAL 的 "27.63"（4 位带小数点）在视觉上完全区分得开
+         *    ⚠️ 为什么不显示 "1.35"：小数点看着像测量值的小数点，一样会混 */
+        return;                              /* 已经上屏，跳过下面的换算 */
     }
 
-    /* ==================== ⑤ 换算：×100 四舍五入 + 钳位 ==================== */
+    /* ==================== ⑤ NORMAL 换算：×100 四舍五入 + 钳位 ==================== */
     n = (int32_t)(v * 100.0f + 0.5f);    /* 四舍五入到两位小数 */
 
     if (n < 0)    { n = 0; }             /* 负值钳位，不然强转成 42 亿 */
     if (n > 9999) { n = 9999; }          /* 4 位装不下 */
 
-    /* ==================== ⑥ 上屏 ==================== */
-    if (s_mode == 1u && s_blink_on == 0u) {
-        Smg_ShowNum((uint32_t)n);        /* ADMIN 且"灭"相位 —— 不带小数点 */
-    } else {
-        Smg_ShowDp((uint32_t)n, 1u);     /* 其余情况 —— 带小数点 */
-    }
+    /* ==================== ⑥ NORMAL 上屏：带小数点，常亮 ==================== */
+    Smg_ShowDp((uint32_t)n, 1u);         /* 27.63 / 56.37 / 5.00 / 0.20 */
 }
 /* USER CODE END 0 */
 
@@ -261,6 +274,18 @@ int main(void)
         static uint32_t last = 0;        /* 心跳 */
         if (Tick_Expired(&last, 500u)) {
             printf("[%lu]tick alive\r\n", (unsigned long)Tick_Ms());
+        }
+    }
+    /* ---- 电压/电流诊断（定位 8888 用，修好后可删）---- */
+    {
+        static uint32_t s_dbg_pwr = 0;
+        if (Tick_Expired(&s_dbg_pwr, 1000u)) {
+            printf("PWR run=%d raw0(I)=%u raw1(V)=%u | V=%.2f I=%.1fmA | abn=%d\r\n",
+                   (int)Adc_IsRunning(),
+                   (unsigned)Adc_GetRaw(ADC_CH_CURR),
+                   (unsigned)Adc_GetRaw(ADC_CH_VOLT),
+                   Power_GetVoltage(), Power_GetCurrent(),
+                   (int)Power_IsAbnormal());
         }
     }
 
