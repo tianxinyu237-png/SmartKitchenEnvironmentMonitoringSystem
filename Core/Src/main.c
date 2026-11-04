@@ -41,6 +41,7 @@
 #include "app_state.h"
 #include "alarm.h"
 #include "drv_sht20.h"       /* 温湿度传感器，非阻塞状态机 */
+#include "drv_ap3216c.h"    /* 光照+接近传感器，寄存器式 I2C */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -255,6 +256,18 @@ int main(void)
     Tick_Init();
     Log_Init();
     Log_Boot();
+    /* ---- 临时：I2C 器件扫描（确认 AP3216C/SHT20 在不在，验完删）---- */
+    {
+        uint8_t a;
+        printf("I2C scan start\r\n");
+        for (a = 0x08u; a <= 0x77u; a++) {
+            if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)((uint16_t)a << 1u),
+                                      2u, 5u) == HAL_OK) {
+                printf("  ACK 0x%02X\r\n", a);
+            }
+        }
+        printf("I2C scan done\r\n");
+    }
     Led_Init();        /* 三个灯全灭，LED1 初值是 SET 必须关 */
 		Key_Init();
     Smg_Init();                 /* 启动 TIM2 1ms 中断，数码管开始扫描 */
@@ -265,6 +278,7 @@ int main(void)
 		App_State_Init();           
     Alarm_Init();               
     Sht20_Init();               /* 温湿度状态机归位，不碰硬件 */
+    Ap3216_Init();              /* ← 新增：写 0x00=0x03，激活 ALS+PS+IR */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -276,6 +290,7 @@ int main(void)
 
     /* ==================== ② 传感器推进 ==================== */
     Sht20_Task();                        /* 温湿度状态机，每圈推进一步，不阻塞 */
+    Ap3216_Task();                       /* ← 新增：光照，内部节流 200ms，不阻塞 */
     if (Sht20_IsReady()) {               /* 第一轮 114ms 没跑完前不喂，避免误判成 0 度 */
         App_State_SetEnv(Sht20_GetTemp(), Sht20_GetHumi());
     }
@@ -311,6 +326,16 @@ int main(void)
         if (Tick_Expired(&s_dbg_sht, 1000u)) {
             printf("SHT T=%.2f RH=%.2f err=%u\r\n",
                    Sht20_GetTemp(), Sht20_GetHumi(), (unsigned)Sht20_GetErrCount());
+        }
+    }
+    {
+        static uint32_t s_dbg_als = 0;   /* 光照：lux / 原始 ALS / 接近值 / 错误数 */
+        if (Tick_Expired(&s_dbg_als, 1000u)) {
+            printf("ALS lux=%.1f raw=%u ps=%u err=%lu\r\n",
+                   Ap3216_GetLux(),
+                   (unsigned)Ap3216_GetAlsRaw(),
+                   (unsigned)Ap3216_GetPsRaw(),
+                   (unsigned long)Ap3216_GetErrCount());
         }
     }
     {

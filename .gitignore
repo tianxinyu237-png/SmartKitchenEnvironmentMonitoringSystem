@@ -47,3 +47,4 @@ EWARM/
 .vscode/
 .cproject
 .project
+*.bak_*
