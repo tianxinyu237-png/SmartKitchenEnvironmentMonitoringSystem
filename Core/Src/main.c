@@ -34,12 +34,19 @@
 #include "bsp_key.h"
 #include "bsp_smg.h"
 #include "bsp_beep.h"
+#include "bsp_fan.h"
+#include "bsp_adc.h"       
+#include "app_power.h"      
 #include "bsp_flame.h"
+#include "app_state.h"
+#include "alarm.h"
+#include "drv_sht20.h"       /* 温湿度传感器，非阻塞状态机 */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+#define PAGE_NORMAL_CNT   5u
+#define PAGE_ADMIN_CNT    4u
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -66,7 +73,94 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/**
+  * @brief  显示任务：读按键、翻页、算数值、送数码管。
+  * @note   必须是独立函数 —— 里面用 return 提前退出（报警态覆盖），
+  *         若直接写在 while(1) 里，return 会结束 main 让系统停摆。
+  */
+static void Ui_Task(void)
+{
+    /* ---- 状态变量：static 保证跨圈保留，不加就每圈归零 ---- */
+    static uint8_t  s_mode     = 0;      /* 0 = NORMAL   1 = ADMIN */
+    static uint8_t  s_page     = 0;      /* 当前页号 */
+    static uint32_t s_t_blink  = 0;      /* 小数点闪烁计时 */
+    static uint8_t  s_blink_on = 1;      /* 1 = 小数点亮 */
 
+    float   v;                           /* 本页要显示的物理量 */
+    int32_t n;                           /* ×100 后的整数 */
+
+    /* ==================== ① 按键 ==================== */
+
+    /* KEY1：切模式，切完回第一页（否则页号越界）*/
+    if (Key_GetPressEvent(KEY_ID_1)) {
+        s_mode = (uint8_t)(s_mode ^ 1u);
+        s_page = 0;
+    }
+
+    /* KEY2：翻页，页数随模式变 */
+    if (Key_GetPressEvent(KEY_ID_2)) {
+        if (s_mode == 0u) {
+            s_page = (uint8_t)((s_page + 1u) % PAGE_NORMAL_CNT);   /* 5 页 */
+        } else {
+            s_page = (uint8_t)((s_page + 1u) % PAGE_ADMIN_CNT);    /* 4 个阈值 */
+        }
+    }
+
+    /* KEY3：只消音，两个模式都一样 */
+    if (Key_GetPressEvent(KEY_ID_3)) {
+        Alarm_Silence();
+    }
+
+    /* ==================== ② 小数点闪烁（ADMIN 模式标识）==================== */
+    if (Tick_Expired(&s_t_blink, 500u)) {
+        s_blink_on = (uint8_t)(s_blink_on ^ 1u);
+    }
+
+    /* ==================== ③ 报警态强制显示报警码 ==================== */
+    if (App_State_Get() == SYS_ALARM) {
+        if (App_State_GetReason() == ALARM_POWER) {
+            Smg_ShowNum(8888u);          /* ← 用电异常码：四个 8 */
+        } else {
+            Smg_ShowNum(9999u);          /*   明火报警码：四个 9 */
+        }
+        return;                          /* ⚠️ 退出 Ui_Task，别覆盖报警码 */
+    }
+		
+    /* ==================== ④ 按模式选值 ==================== */
+    if(s_mode == 0u) {
+        /* ---- NORMAL：5 页测量值 ---- */
+        switch (s_page) {
+            case 0:  v = Sht20_GetTemp();       break;   /* 温度：28.43 */
+            case 1:  v = Sht20_GetHumi();       break;   /* 湿度：57.60 */
+            case 2:  v = Power_GetVoltage();    break;   /* ← 电压：5.02 */
+            case 3:  v = Power_GetCurrent() / 1000.0f;   /* ← 电流：mA → A */
+                     break;
+            /*  ↑ 为什么 /1000：Power_GetCurrent() 返回 mA，而数码管要显示
+             *    「0.52」这种以 A 为单位的数，×100 后是 52
+             *    如果直接显示 mA（520），屏幕上就是 520，看不出单位
+             *
+             *    ⚠️ 也可以显示 mA（不除 1000），那屏幕显示 520，答辩时说「单位是 mA」
+             *    两种都行，但要统一口径。这里选 A，因为「0.52」更像仪表的读数 */
+            default: v = 0.0f;                break;   /* 第 4 页报警码，正常时不显示 */
+        }
+    }else {
+        /* ---- ADMIN：4 个阈值 ---- */
+        v = App_State_GetThreshold((ThId_t)s_page);
+    }
+
+    /* ==================== ⑤ 换算：×100 四舍五入 + 钳位 ==================== */
+    n = (int32_t)(v * 100.0f + 0.5f);    /* 四舍五入到两位小数 */
+
+    if (n < 0)    { n = 0; }             /* 负值钳位，不然强转成 42 亿 */
+    if (n > 9999) { n = 9999; }          /* 4 位装不下 */
+
+    /* ==================== ⑥ 上屏 ==================== */
+    if (s_mode == 1u && s_blink_on == 0u) {
+        Smg_ShowNum((uint32_t)n);        /* ADMIN 且"灭"相位 —— 不带小数点 */
+    } else {
+        Smg_ShowDp((uint32_t)n, 1u);     /* 其余情况 —— 带小数点 */
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -113,101 +207,68 @@ int main(void)
 		Key_Init();
     Smg_Init();                 /* 启动 TIM2 1ms 中断，数码管开始扫描 */
     Beep_Init();                /* 蜂鸣器先哑着 */
-    Flame_Init();               /* PB3/PB4 双边沿 EXTI */
-
+		Fan_Init();
+    Flame_Init();               /* PB3 火焰 + PB4 人体红外，双边沿 EXTI */
+		Power_Init();            /* ← 新增：启动 ADC + DMA */
+		App_State_Init();           
+    Alarm_Init();               
+    Sht20_Init();               /* 温湿度状态机归位，不碰硬件 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-	
-	
-	
-	uint32_t last=0;
-
-	/* M3 自测变量（验证完删掉） */
-	uint32_t t_demo = 0;
-	uint8_t  demo   = 2;      /* 初值 2，第一次自增才是 0 */
 
   while (1)
   {
-		
-		/* ===== M9 EXTI 验证：打火机测哪个脚在报 ===== */
-		{
-			static uint32_t t_f = 0;
-			if (Tick_Expired(&t_f, 1000u)) {
-				printf("F:flame=%lu/%d  pir=%lu/%d\r\n",
-				       (unsigned long)Flame_GetCount(), (int)Flame_GetLevel(),
-				       (unsigned long)Pir_GetCount(),   (int)Pir_GetLevel());
-			}
-		}
+    /* ==================== ① 按键采样（必须早于取事件）==================== */
+    Key_Scan();                          /* 产生按下事件，下面才有得取 */
 
-		Key_Scan();
+    /* ==================== ② 传感器推进 ==================== */
+    Sht20_Task();                        /* 温湿度状态机，每圈推进一步，不阻塞 */
+    if (Sht20_IsReady()) {               /* 第一轮 114ms 没跑完前不喂，避免误判成 0 度 */
+        App_State_SetEnv(Sht20_GetTemp(), Sht20_GetHumi());
+    }
+		Power_Task();                    /* ← 新增：必须在 App_State_Task 之前 */
 
-		/* ===== M6 蜂鸣器验证：上电 2 秒后响 2 声（每声 200ms，间隔 200ms） ===== */
-		{
-			static uint32_t t_b = 0;
-			static uint8_t  done = 0;
-			if (!done && Tick_Expired(&t_b, 2000u)) {
-				Beep_Beep(2u, 200u, 200u);
-				printf("BEEP: 2 beeps test\r\n");
-				done = 1u;
-			}
-		}
+    /* ==================== ③ 状态计算 ==================== */
+    App_State_Task();                    /* 算状态：ALARM > WARN > NORMAL */
 
+    /* ==================== ④ 动作执行 ==================== */
+    Alarm_Apply(App_State_Get());        /* 状态变了才动作 */
+    Alarm_Task();                        /* 推进闪烁和间歇鸣叫 */
+    Led_Task();
+    Beep_Task();
 
-		/* ===== M5 正式功能：1.234 → 1.111 → 0.000 → 8.888，每秒轮换 ===== */
-		{
-			static uint32_t t_cy = 0;
-			static uint8_t  cy = 0;
-			if (Tick_Expired(&t_cy, 1000)) {
-				switch (cy) {
-					case 0: Smg_ShowDp(1234u, 0); break;   /* 1.234 */
-					case 1: Smg_ShowDp(1111u, 0); break;   /* 1.111 */
-					case 2: Smg_ShowDp(0u,    0); break;   /* 0.000 */
-					case 3: Smg_ShowDp(8888u, 0); break;   /* 8.888 */
-				}
-				cy = (uint8_t)((cy + 1u) & 3u);
-			}
-		}
+    /* ==================== ⑤ 按键响应 + 数码管上屏 ==================== */
+    Ui_Task();                           /* 用本圈最新状态，报警时立刻显示 9999/8888 */
 
-		if(Tick_Expired(&last,500)){
-				printf("[%lu]tick alive\r\n",(unsigned long)Tick_Ms());
-		}
+    /* ==================== ⑥ 调试打印（验完删）==================== */
+    {
+        static uint32_t t_f = 0;
+        if (Tick_Expired(&t_f, 1000u)) {
+            printf("F:flame=%lu/%d  pir=%lu/%d\r\n",
+                   (unsigned long)Flame_GetCount(), (int)Flame_GetLevel(),
+                   (unsigned long)Pir_GetCount(),   (int)Pir_GetLevel());
+        }
+    }
+    {
+        static uint32_t s_dbg_sht = 0;
+        if (Tick_Expired(&s_dbg_sht, 1000u)) {
+            printf("SHT T=%.2f RH=%.2f err=%u\r\n",
+                   Sht20_GetTemp(), Sht20_GetHumi(), (unsigned)Sht20_GetErrCount());
+        }
+    }
+    {
+        static uint32_t last = 0;        /* 心跳 */
+        if (Tick_Expired(&last, 500u)) {
+            printf("[%lu]tick alive\r\n", (unsigned long)Tick_Ms());
+        }
+    }
 
-		/* ===== M3 自测：三态轮播，各 3 秒（验证完删掉） ===== */
-		if (Tick_Expired(&t_demo, 3000))
-		{
-			Led_BlinkStop(LED_ID_L1);
-			Led_BlinkStop(LED_ID_L2);
-			Led_BlinkStop(LED_ID_L3);
-
-			switch (demo) {
-			case 0: Led_On(LED_ID_L1);            printf(">>> NORMAL : LED1 ON\r\n"); break;
-			case 1: Led_On(LED_ID_L2);            printf(">>> WARN   : LED2 ON\r\n"); break;
-			case 2: Led_BlinkStart(LED_ID_L3,500);printf(">>> ALARM  : LED3 1Hz BLINK\r\n"); break;
-			}
-			demo = (demo + 1) % 3;
-		}
-
-		Led_Task();      /* 每圈必须调用，否则闪不起来 */
-		Beep_Task();     /* 每圈必须调用，蜂鸣器计数靠它推进 */
-    /* 点灯自测：验证时间基准时先注释掉。
-       留着的话一圈主循环 3 秒，串口会 3 秒一行而不是 500ms 一行。
-    		LED1ON();
-    HAL_Delay(1000);   // 亮1秒（单位毫秒，1000=1s）
-    LED1OFF();
-    
-    LED2ON();
-    HAL_Delay(1000);
-    LED2OFF();
-    
-    LED3ON();
-    HAL_Delay(1000);
-    LED3OFF();
-    */
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
+
   /* USER CODE END 3 */
 }
 

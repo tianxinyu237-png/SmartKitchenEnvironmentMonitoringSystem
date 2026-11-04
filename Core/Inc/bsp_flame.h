@@ -6,22 +6,24 @@
 /*
  * 光电/火焰输入 + 人体红外输入（EXTI 外部中断）
  *
- * 硬件实测结论：
- *   PB2 = 光电/火焰 (ITR9608 槽型红外对射)，遮挡 → 0，放开 → 1
- *   PB4 = 人体红外 (RDA226)，检测到人体活动 → 0
+ * 硬件接口（扩展板丝印 → MCU 引脚）：
+ *   IO Fire → PB3  火焰传感器（红外接收管），检测到火焰 → 0，无火焰 → 1
+ *   IO ITR  → PB2  ITR9608 槽型光电开关（备用，本轮未启用）
+ *   IO PIR  → PB4  人体红外 (RDA226)，检测到人体活动 → 0
  *
- * 注意：PB2 复位时是 BOOT1 引脚，只在复位瞬间被采样，运行期可以正常
- *       当 GPIO 输入用，不冲突。
+ * 注意：PB3 出厂功能是 JTDO、PB4 是 NJTRST（都是 JTAG 引脚）。ST-Link 用 SWD
+ *       连接时会禁掉 JTAG-DP，这两个脚就归 GPIO 管；若 PB3 配了没反应，
+ *       先确认下载器是 SWD 模式。
  *
  * 两个事件源各用一套计数器，绝不混在一起：
  *   光电     = 真实遮挡/火源检测 → 参与 ALARM
  *   人体红外 = 有没有人         → 不参与报警，只做辅助判断
  */
 
-#define FLAME_ACTIVE_LEVEL   0u     /* 0 = 低电平代表光电被遮挡 */
+#define FLAME_ACTIVE_LEVEL   0u     /* 0 = 低电平代表检测到火焰（LM393 型火焰模块典型极性） */
 #define PIR_ACTIVE_LEVEL     0u     /* 0 = 检测到人体活动 */
 
-void     Flame_Init(void);              /* 配 PB2 / PB4 双边沿 EXTI + NVIC */
+void     Flame_Init(void);              /* 配 PB3 / PB4 双边沿 EXTI + NVIC */
 
 uint8_t  Flame_GetLevel(void);          /* 光电当前电平 0/1 */
 uint8_t  Flame_IsActive(void);          /* 1 = 光电触发 */

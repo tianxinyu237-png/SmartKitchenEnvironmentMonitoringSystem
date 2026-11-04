@@ -61,6 +61,7 @@ void Led_BlinkStart(LedId_t id, uint32_t half_period_ms)
     s_blink[id].half = (uint16_t)half_period_ms;
     s_blink[id].last = Tick_Ms();
     s_blink[id].on   = 0;
+	
 }
 
 void Led_BlinkStop(LedId_t id)
