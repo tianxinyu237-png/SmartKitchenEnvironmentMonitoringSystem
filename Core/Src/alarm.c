@@ -20,14 +20,37 @@ void Alarm_Init(void){
 
 uint8_t Alarm_IsSilenced(void) { return s_silenced; }
 
+/* 强制静音（单向）：置位 + 立刻停蜂鸣器。状态不变，灯照闪 */
 void Alarm_Silence(void)
 {
-    /* TODO 7（3 行）
-     * 置 s_silenced = 1，并且立刻让蜂鸣器停下（调 Beep_Stop()）。
-     * 注意：只消音，不改状态 —— 灯还得继续闪。
-     */
 		s_silenced =1;
 		Beep_Stop();
+}
+
+/* 静音 ⇄ 报警 来回切换（绑 KEY3，演示用）
+ *
+ * ⚠️ 只有 ALARM 态才有效。非报警时按了不做事 ——
+ *    否则会在 NORMAL 态把 s_silenced 拨成 1，虽然下次真报警时
+ *    Alarm_Apply 会清 0、表现上看不出问题，但状态是脏的。
+ *
+ * ⚠️ 切回「响」的时候不在这里开蜂鸣器。
+ *    下一圈 Alarm_Task 看到 s_silenced==0 会自己 Beep_Beep()。
+ *    在这里开反而会和 Task 抢，响声乱掉。
+ *
+ * ⚠️ 为什么用 ^1 而不是 if/else 两套赋值：
+ *    s_silenced 只有 0/1 两种值，^1 就是翻转，一行搞定。
+ *    （按键抖动这里不用操心 —— Key_GetPressEvent 已经在驱动层
+ *      做了 20ms 去抖，一次按压只产生一个事件） */
+void Alarm_ToggleSilence(void)
+{
+    if (s_cur != SYS_ALARM) {
+        return;                          /* 没在报警，没啥可静音的 */
+    }
+    s_silenced = (uint8_t)(s_silenced ^ 1u);
+
+    if (s_silenced != 0u) {
+        Beep_Stop();                     /* 切到静音：立刻掐掉当前这一声 */
+    }
 }
 
 

@@ -104,9 +104,10 @@ static void Ui_Task(void)
         }
     }
 
-    /* KEY3：只消音，两个模式都一样 */
+    /* KEY3：静音 ⇄ 报警 来回切（演示用：响→静→响，不用等状态变化）
+     *   ⚠️ 只有 ALARM 态有效，NORMAL/WARN 下按了没反应 */
     if (Key_GetPressEvent(KEY_ID_3)) {
-        Alarm_Silence();
+        Alarm_ToggleSilence();
     }
 
     /* ==================== ② 报警态强制显示报警码 ==================== */
