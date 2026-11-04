@@ -312,6 +312,51 @@ int main(void)
     /* ==================== ⑤ 按键响应 + 数码管上屏 ==================== */
     Ui_Task();                           /* 用本圈最新状态，报警时立刻显示 9999/8888 */
 
+    /* ==================== ⑤.5 状态上报（需求 5/6/7/10）==================== */
+    /* 只在状态「变化」的那一圈打一次，不是每圈刷屏。
+     * s_last_st 初值 -1 是非法状态，保证上电第一圈先打一条基线。
+     * 演示报警（s_demo_alarm）单独跟踪，标 [DEMO] 和真报警区分开。 */
+    {
+        static int32_t s_last_st   = -1;     /* 上次上报的状态；-1 = 还没报过 */
+        static uint8_t s_last_demo = 0xFFu;  /* 上次上报的演示标志 */
+        int32_t    now  = (int32_t)App_State_Get();
+        uint8_t    demo = s_demo_alarm;
+
+        if (now != s_last_st || demo != s_last_demo) {
+            s_last_st   = now;
+            s_last_demo = demo;
+
+            if (demo != 0u) {
+                /* 演示模式：状态机其实是 NORMAL，但视觉上是报警 */
+                printf(">>> STATE: ALARM [DEMO] by KEY3\r\n");
+            } else if (now == (int32_t)SYS_NORMAL) {
+                printf(">>> STATE: NORMAL\r\n");
+            } else if (now == (int32_t)SYS_WARN) {
+                /* 环境预警：把实测值和阈值一起打出来，答辩时一眼看清判据 */
+                printf(">>> WARN : T=%.2fC(Th %.1f/%.1f) RH=%.2f%%(Th %.1f/%.1f)\r\n",
+                       Sht20_GetTemp(),
+                       App_State_GetThreshold(TH_TEMP_HIGH),
+                       App_State_GetThreshold(TH_TEMP_LOW),
+                       Sht20_GetHumi(),
+                       App_State_GetThreshold(TH_HUMI_HIGH),
+                       App_State_GetThreshold(TH_HUMI_LOW));
+            } else {
+                /* SYS_ALARM：按原因分流，明火和用电异常分开报 */
+                AlarmReason_t r = App_State_GetReason();
+                if (r == ALARM_FLAME) {
+                    printf(">>> ALARM: FLAME level=%d cnt=%lu\r\n",
+                           (int)Flame_GetLevel(),
+                           (unsigned long)Flame_GetCount());
+                } else if (r == ALARM_POWER) {
+                    printf(">>> ALARM: POWER V=%.2fV(4.50~5.50) I=%.1fmA(max 250)\r\n",
+                           Power_GetVoltage(), Power_GetCurrent());
+                } else {
+                    printf(">>> ALARM: reason=UNKNOWN\r\n");
+                }
+            }
+        }
+    }
+
     /* ==================== ⑥ 调试打印（验完删）==================== */
     {
         static uint32_t t_f = 0;
