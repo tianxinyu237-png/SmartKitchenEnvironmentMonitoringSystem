@@ -19,6 +19,7 @@ void Cloud_Task(void);          /* 上传 + 收指令，内部按时间节流 */
 
 void    Cloud_ManualExit(void);      /* 强制退出手动模式（进报警时调） */
 uint8_t Cloud_IsFanOverridden(void); /* 1 = 风扇被手动接管 */
+uint8_t Cloud_IsLedOverridden(void); /* 1 = LED 被手动接管 */
 /* ---- 供外部查询 ---- */
 uint8_t Cloud_IsManual(void);   /* 1 = 手动模式生效中 */
 

@@ -31,7 +31,12 @@ typedef struct {
 static ManualOverride_t g_manual = {0};
 
 #define MANUAL_TIMEOUT_MS   300000u     /* 5 分钟无指令自动退出 */
-#define UPLOAD_PERIOD_MS    2000u       /* 每 2 秒上传一次 */
+/* 为什么是 5 秒不是 2 秒：
+ *   一条上报帧约 60 字节，服务器还会回一行 ACK —— 一次往返 ~130 字节。
+ *   2 秒一次 = 65 B/s，云端控制台被刷屏，长时间挂着也费流量。
+ *   温湿度这种慢变量 5 秒已经完全够用，环境报警本身是本地决策，
+ *   网络只是"顺带通知"，断了也不影响保护。 */
+#define UPLOAD_PERIOD_MS    5000u       /* 每 5 秒上传一次 */
 
 /* ============================================================
  * 手动模式退出（三个入口共用）
@@ -47,6 +52,7 @@ uint8_t Cloud_IsManual(void) { return g_manual.active; }
 
 /* 给 alarm.c 用：查某个输出是否被手动接管 */
 uint8_t Cloud_IsFanOverridden(void) { return g_manual.ovr_fan; }
+uint8_t Cloud_IsLedOverridden(void) { return g_manual.ovr_led; }
 
 /* ============================================================
  * 上传任务（需求 13）

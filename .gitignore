@@ -1,50 +1,5 @@
-# ===== Keil MDK 编译产物 =====
-MDK-ARM/*/Objects/
-MDK-ARM/*/Listings/
-MDK-ARM/*/*.axf
-MDK-ARM/*/*.hex
-MDK-ARM/*/*.bin
-MDK-ARM/*/*.map
-MDK-ARM/*/*.lst
-MDK-ARM/*/*.crf
-MDK-ARM/*/*.d
-MDK-ARM/*/*.o
-MDK-ARM/*/*.dep
-MDK-ARM/*/*.htm
-MDK-ARM/*/*.lnp
-MDK-ARM/*/*.sct
-MDK-ARM/*/*.iex
-MDK-ARM/*/*.__i
-MDK-ARM/*/*.uvguix.*
-MDK-ARM/*.uvguix.*
-MDK-ARM/*/*.uvgui.*
-MDK-ARM/*.uvgui.*
-
-# ===== 编辑器 / 备份 =====
-*.bak
-*.bak-*
-*.orig
-*.rej
-*~
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# ===== CMSIS 里本项目用不到的大块（省 18MB） =====
-Drivers/CMSIS/DSP/
-Drivers/CMSIS/NN/
-Drivers/CMSIS/DAP/
-Drivers/CMSIS/Documentation/
-Drivers/CMSIS/RTOS/
-Drivers/CMSIS/RTOS2/
-Drivers/CMSIS/Core_A/
-# 只留 stm32f407 的器件头文件，其余 F4 型号全部忽略（白名单写法最可靠）
-Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f4*.h
-!Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f407xx.h
-
-# ===== 其他 IDE =====
-EWARM/
-.vscode/
-.cproject
-.project
-*.bak_*
+*.bak*
+build*.log
+MDK-ARM/*.log
+MDK-ARM/Objects/
+MDK-ARM/Listings/

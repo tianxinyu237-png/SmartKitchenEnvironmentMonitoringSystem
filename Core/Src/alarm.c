@@ -92,9 +92,15 @@ void Alarm_Apply(SysState_t st)
         break;
 
     case SYS_WARN:
-        Led_BlinkStop(LED_ID_L3);
-        Led_Off(LED_ID_L1);
-        Led_On(LED_ID_L2);
+        /* ★ LED 也要看手动覆盖：云端 CMD=LED,VAL=3 点亮的灯，
+           下一圈状态机切到 WARN 就会被这里改掉，用户看到的是"指令没生效"。
+           蜂鸣器/马达不受保护 —— 安全相关的输出必须本地说了算。 */
+        if (!Cloud_IsLedOverridden())
+        {
+            Led_BlinkStop(LED_ID_L3);
+            Led_Off(LED_ID_L1);
+            Led_On(LED_ID_L2);
+        }
         Beep_Stop();
         if (!Cloud_IsFanOverridden())   /* ★ 手动接管时不动风扇 */
         {
@@ -104,9 +110,12 @@ void Alarm_Apply(SysState_t st)
         break;
 
     case SYS_NORMAL:
-        Led_BlinkStop(LED_ID_L3);
-        Led_Off(LED_ID_L2);
-        Led_On(LED_ID_L1);
+        if (!Cloud_IsLedOverridden())   /* ★ 同上，手动接管时不碰灯 */
+        {
+            Led_BlinkStop(LED_ID_L3);
+            Led_Off(LED_ID_L2);
+            Led_On(LED_ID_L1);
+        }
         Beep_Stop();
         if (!Cloud_IsFanOverridden())   /* ★ 手动接管时不动风扇 */
         {
