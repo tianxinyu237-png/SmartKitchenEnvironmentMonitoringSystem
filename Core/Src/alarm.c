@@ -76,83 +76,60 @@ void Alarm_ToggleSilence(void)
 
 void Alarm_Apply(SysState_t st)
 {
-    if (st == s_cur) return;     /* 状态没变什么都不做 */
+    if (st == s_cur) return;        /* 状态没变什么都不做 */
     s_cur = st;
-					
-			switch(st){
-					case SYS_ALARM:
-					Cloud_ManualExit();             /* ★ 进报警强制退出手动，安全优先 */
-					Led_Off(LED_ID_L1);
-					Led_Off(LED_ID_L2);
-					Led_BlinkStart(LED_ID_L3, LED_BLINK_MS);
-					s_silenced = 0;
-					Fan_SetSpeed(FAN_SPEED_FULL);   /* ← TODO 9：明火/用电异常 → 全速排风 */
-					MOTOR_ON();                     /* ← 报警：马达一起开（PC7） */
-					break;
 
-						case SYS_WARN:
-					Led_BlinkStop(LED_ID_L3);
-					Led_Off(LED_ID_L1);
-					Led_On(LED_ID_L2);
-					Beep_Stop();
-					if (!Cloud_IsFanOverridden())   /* ★ 手动接管时不动风扇 */
-					{
-						Fan_SetSpeed(FAN_SPEED_MID);    /* ← TODO 9：温湿度超限 → 中速换气 */
-					}
-					MOTOR_OFF();                    /* ← 预警不开发电机 */
-					break;
+    switch (st)
+    {
+    case SYS_ALARM:
+        Cloud_ManualExit();         /* ★ 进报警强制退出手动，安全优先 */
+        Led_Off(LED_ID_L1);
+        Led_Off(LED_ID_L2);
+        Led_BlinkStart(LED_ID_L3, LED_BLINK_MS);
+        s_silenced = 0;             /* 新报警取消静音 */
+        Fan_SetSpeed(FAN_SPEED_FULL);   /* 明火/用电异常 → 全速排风 */
+        MOTOR_ON();                     /* 报警：马达一起开（PC7） */
+        break;
 
-						case SYS_NORMAL:
-					Led_BlinkStop(LED_ID_L3);
-					Led_Off(LED_ID_L2);
-					Led_On(LED_ID_L1);
-					Beep_Stop();
-					if (!Cloud_IsFanOverridden())   /* ★ 手动接管时不动风扇 */
-					{
-						Fan_Off();                      /* ← TODO 9：正常 → 停转 */
-					}
-					MOTOR_OFF();                    /* ← 正常：马达停 */
-					break;
-					}
+    case SYS_WARN:
+        Led_BlinkStop(LED_ID_L3);
+        Led_Off(LED_ID_L1);
+        Led_On(LED_ID_L2);
+        Beep_Stop();
+        if (!Cloud_IsFanOverridden())   /* ★ 手动接管时不动风扇 */
+        {
+            Fan_SetSpeed(FAN_SPEED_MID);    /* 温湿度超限 → 中速换气 */
+        }
+        MOTOR_OFF();                    /* 预警不开发电机 */
+        break;
 
-		
-
-
-
-
-    /* TODO 9（4 行）风扇
-     *   风扇 PC6 = TIM3_CH1（PWM）。
-     *   ALARM → 全速（compare 拉到最大）
-     *   WARN  → 中速
-     *   NORMAL→ 停（或低速）
-     *   如果 PWM 还没调通，先用 GPIO 通断代替，标注 TODO 回头改。
-     */
-
-			
+    case SYS_NORMAL:
+        Led_BlinkStop(LED_ID_L3);
+        Led_Off(LED_ID_L2);
+        Led_On(LED_ID_L1);
+        Beep_Stop();
+        if (!Cloud_IsFanOverridden())   /* ★ 手动接管时不动风扇 */
+        {
+            Fan_Off();                      /* 正常 → 停转 */
+        }
+        MOTOR_OFF();                    /* 正常：马达停 */
+        break;
+    }
 }
 
 
 void Alarm_Task(void)
 {
-    /* TODO 10（约 12 行）蜂鸣器间歇鸣叫
-     * 只在 ALARM 且没被消音时干活：
-     *     if (s_cur != SYS_ALARM || s_silenced) return;
-     *     if (!Beep_IsBusy()) {
-     *         Beep_Beep(2u, 150u, 150u);    ← 响两声，间隔 150ms
-     *     }
-     * ⚠️ 为什么要用 Beep_IsBusy() 判断？
-     *    如果每圈都调 Beep_Beep()，remain 被不断重置成 2，
-     *    结果是"第一声响 150ms 停了又被重置"，听着像一直响。
-     *    只有等它闲下来（响完一轮）才重新触发，才是"间歇"。
-     *
-     * ⚠️ 为什么不用 Beep_On() 一直响？
-     *    需求禁止长鸣不关；而且持续尖叫在答辩现场是扣分项。
-     */
-	
-			if (s_cur != SYS_ALARM || s_silenced) return;
-      if (!Beep_IsBusy()) {
-              Beep_Beep(2u, 150u, 150u);   
-       }
+    /* 蜂鸣器间歇鸣叫（需求：ALARM 时响，但不能长鸣不关）
+     * 只在 ALARM 且没被消音时干活。
+     * ⚠️ 用 Beep_IsBusy() 判断：如果每圈都调 Beep_Beep()，remain 被不断
+     *    重置成 2，结果是"第一声响 150ms 停了又被重置"，听着像一直响。
+     *    只有等它闲下来（响完一轮）才重新触发，才是"间歇"。 */
+    if (s_cur != SYS_ALARM || s_silenced)
+        return;
 
+    if (!Beep_IsBusy())
+    {
+        Beep_Beep(2u, 150u, 150u);      /* 响两声，间隔 150ms */
+    }
 }
-	
