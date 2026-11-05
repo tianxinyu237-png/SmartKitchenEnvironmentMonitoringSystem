@@ -51,6 +51,13 @@ void Ap3216_Task(void)
         return;
     }
 
+    /* ⚠️ AP3216C 的 ALS 高字节 bit7 是「本次转换无效」标志（1 = 无效）。
+       不判断直接拼 16 位的话，无效时 raw 会凭空多出 32768，
+       lux 瞬间跳到 11000+ —— 现象是屏幕上的光照值偶尔暴涨一下。 */
+    if ((buf[1] & 0x80u) != 0u) {
+        return;                         /* 本次数据无效，保留上一次的值 */
+    }
+
     s_als_raw = (uint16_t)(((uint16_t)buf[1] << 8) | (uint16_t)buf[0]);
     s_lux     = (float)s_als_raw * AP3216_LUX_PER_CNT;
 

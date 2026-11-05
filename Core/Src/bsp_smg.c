@@ -9,7 +9,7 @@ static const uint8_t SEG[10]={
 	0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F   //1-9
 };
 static const uint16_t DIG[SMG_DIGITS] = {0x0100,0x0200,0x0400,0x0800};
-static uint8_t s_buf[SMG_DIGITS]; 	/* 4 位各自要显示的段码（缓冲区） */
+static volatile uint8_t s_buf[SMG_DIGITS];   /* 4 位段码。中断读、主循环写 → 必须 volatile */
 static uint8_t s_idx=0;					 		/* 下次该刷第几位，0~3 循环 */
 static uint8_t s_div=0;            	/* 分频计数：1ms 中断 → 2ms 刷一位 */
 
@@ -72,9 +72,21 @@ void Smg_ShowDp(uint32_t num, uint8_t dp_pos)
     d[2] = (uint8_t)(num /   10UL % 10UL);   /* 十位 */
     d[3] = (uint8_t)(num          % 10UL);   /* 个位 */
 
-    for (i = 0; i < SMG_DIGITS; i++) {
-        s_buf[i] = SEG[d[i]];               /* 数字 → 段码 */
-        if (i == dp_pos) s_buf[i] |= 0x80u; /* bit7 = 小数点，|0x80 就点亮它 */
+    /* ⚠️ 必须先在局部数组算完，再一次性拷进 s_buf。
+       直接往 s_buf 逐位写的话，TIM2 中断（每 2ms 刷一位）会插在中间，
+       读到「千位是新数、百位还是旧数」的混合帧 —— 屏幕上闪一下错值，
+       而且偶发、难复现。临界区只有 4 字节拷贝，几微秒，不影响串口中断。 */
+    {
+        uint8_t tmp[SMG_DIGITS];
+
+        for (i = 0; i < SMG_DIGITS; i++) {
+            tmp[i] = SEG[d[i]];                 /* 数字 → 段码 */
+            if (i == dp_pos) tmp[i] |= 0x80u;   /* bit7 = 小数点，|0x80 点亮 */
+        }
+
+        __disable_irq();
+        for (i = 0; i < SMG_DIGITS; i++) s_buf[i] = tmp[i];
+        __enable_irq();
     }
 }
 void Smg_ShowDigitsDp(uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3, uint8_t dp_pos)
@@ -84,12 +96,20 @@ void Smg_ShowDigitsDp(uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3, uint8_t dp
 
     tmp[0] = d0; tmp[1] = d1; tmp[2] = d2; tmp[3] = d3;
 
-    for (i = 0; i < SMG_DIGITS; i++) {
-        /* 0~9 查表显示；其它值（约定传 0xFF）这一位写 0x00 = 全灭
-         *  ↑ 必须先判断再查表：SEG[] 只有 10 个元素，
-         *    SEG[0xFF] 会读到数组后面 245 字节的野内存，画面上是乱码 */
-        s_buf[i] = (tmp[i] <= 9u) ? SEG[tmp[i]] : 0x00u;
-        if (i == dp_pos) s_buf[i] |= 0x80u;  /* bit7 = 小数点 */
+    {
+        uint8_t out[SMG_DIGITS];
+
+        for (i = 0; i < SMG_DIGITS; i++) {
+            /* 0~9 查表显示；其它值（约定传 0xFF）这一位写 0x00 = 全灭
+             *  ↑ 必须先判断再查表：SEG[] 只有 10 个元素，
+             *    SEG[0xFF] 会读到数组后面 245 字节的野内存，画面上是乱码 */
+            out[i] = (tmp[i] <= 9u) ? SEG[tmp[i]] : 0x00u;
+            if (i == dp_pos) out[i] |= 0x80u;   /* bit7 = 小数点 */
+        }
+
+        __disable_irq();
+        for (i = 0; i < SMG_DIGITS; i++) s_buf[i] = out[i];
+        __enable_irq();
     }
 }
 
@@ -101,7 +121,10 @@ void Smg_ShowDigits(uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3)
 void Smg_Clear(void)
 {
     uint8_t i;
+
+    __disable_irq();
     for (i = 0; i < SMG_DIGITS; i++) s_buf[i] = 0;
+    __enable_irq();
 }
 
 /* ---- TIM2 1ms 回调。HAL 里是 __weak 空函数，这里重写它 ----

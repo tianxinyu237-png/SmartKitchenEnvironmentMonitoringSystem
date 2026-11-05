@@ -35,6 +35,12 @@ static float        s_temp   = 0.0f;      /* 最近一次成功测到的温度  
 static float        s_humi   = 0.0f;      /* 最近一次成功测到的湿度  */
 static uint8_t      s_ready  = 0;         /* 跑完过一整轮没有        */
 static uint32_t     s_err    = 0;         /* I2C 出错次数（调试用）  */
+static uint32_t     s_t_backoff = 0;      /* 出错后的退避时刻        */
+#define SHT20_BACKOFF_MS  500u            /* 出错后等 500ms 再重试
+
+ * 为什么必须退避：HAL_I2C_Master_Transmit 失败时要等满 50ms 超时才返回。
+ * 传感器没插 / 总线被拉死时，不退避就是每圈 50ms，主循环直接被拖成
+ * 20Hz —— 数码管刷新、按键响应全跟着卡。 */
 
 /* ---------- 内部函数：把 16 位 raw 换成物理量 ---------- */
 static float Sht20_RawToTemp(uint16_t raw);
@@ -76,6 +82,11 @@ void Sht20_Task(void)
      * ------------------------------------------------------------------ */
     case SHT_IDLE:
     {
+        /* 上一次失败过？等够退避时间再来，避免每圈都去撞 50ms 超时 */
+        if (s_err != 0u && !Tick_Expired(&s_t_backoff, SHT20_BACKOFF_MS)) {
+            return;
+        }
+
         cmd = SHT20_CMD_TEMP;                             /* 本轮先测温度 */
 
         if (HAL_I2C_Master_Transmit(&hi2c1, SHT20_ADDR_W,  /* 发给 0x80（写） */
@@ -88,7 +99,8 @@ void Sht20_Task(void)
         }
         else
         {
-            s_err++;                    /* 失败只计数，留在 IDLE 下轮重试 */
+            s_err++;                    /* 失败只计数 */
+            s_t_backoff = Tick_Ms();    /* 记下失败时刻，IDLE 里据此退避 */
         }                               /* 绝不 while 重试，绝不卡死      */
         break;
     }
@@ -109,7 +121,8 @@ void Sht20_Task(void)
             != HAL_OK)                                     /* 读失败？         */
         {
             s_err++;                    /* 计数                    */
-            s_state = SHT_IDLE;         /* 回起点，下轮重发命令     */
+            s_t_backoff = Tick_Ms();    /* 退避起点                */
+            s_state = SHT_IDLE;         /* 回起点，退避后重发命令   */
             return;                     /* 这一轮就此作废           */
         }
 
@@ -125,6 +138,7 @@ void Sht20_Task(void)
         else
         {
             s_err++;
+            s_t_backoff = Tick_Ms();
             s_state = SHT_IDLE;
         }
         break;
@@ -143,6 +157,7 @@ void Sht20_Task(void)
         if (HAL_I2C_Master_Receive(&hi2c1, SHT20_ADDR_R, buf, 3u, SHT20_I2C_TMO) != HAL_OK)
         {
             s_err++;
+            s_t_backoff = Tick_Ms();
             s_state = SHT_IDLE;
             return;
         }

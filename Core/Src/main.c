@@ -256,15 +256,42 @@ int main(void)
   MX_USART6_UART_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
-	
-	/* ... 你原有的初始化 ... */
+
+  /* ==================== ① 时钟节拍 ==================== */
+  Tick_Init();                      /* 空实现：SysTick 已由 HAL_Init 配好 1ms */
+
+  /* ==================== ② 输出先摆到安全态 ==================== */
+  /* ⚠️ 顺序讲究：先把所有会动的输出关掉，再启动任何外设。
+     上电瞬间风扇/蜂鸣器/马达自己动一下，答辩现场很扣分。 */
+  Led_Init();                       /* 三灯全灭 */
+  Beep_Init();                      /* 蜂鸣器先哑着 */
+  Fan_Init();                       /* 启动 TIM3_CH1 PWM，CCR=0 不转 */
+  Smg_Init();                       /* ★ 启动 TIM2 1ms 中断；少这一句整屏不亮，
+                                       因为没有任何人会去刷新 s_buf */
+  MOTOR_OFF();                      /* PC7 马达停 */
+
+  /* ==================== ③ 输入 ==================== */
+  Key_Init();                       /* PC9/PC8/PC5 输入 + 上拉 */
+  Flame_Init();                     /* PB3/PB4 双边沿 EXTI + NVIC */
+  /* ⚠️ Flame_Init 必须排在 App_State_Task 之前：
+     s_flame_lvl 是 static，初值 0，而 FLAME_ACTIVE_LEVEL 恰好也是 0，
+     不先读一次真实电平，状态机会一直判「有火」，上电即 ALARM。 */
+
+  /* ==================== ④ 传感器 ==================== */
+  Sht20_Init();                     /* 复位温湿度状态机（不碰硬件） */
+  Ap3216_Init();                    /* 光照 + 接近，寄存器式 I2C */
+  Power_Init();                     /* 内含 Adc_Init：启动 ADC + DMA 循环搬运 */
+
+  /* ==================== ⑤ 应用层 ==================== */
+  App_State_Init();                 /* ★ 填阈值表。不调的话 s_th[] 全 0，
+                                       温度 25 > 0 → 一上电就 WARN */
+  Alarm_Init();                     /* s_cur 归位 NORMAL，风扇/马达停 */
+  Cloud_Init();                     /* 云端层：清手动覆盖状态 */
 
   /* 挂上 ESP8266 接收。只挂这一次 ——
      回调里每帧结束会自己重新挂，多挂一次会导致第一帧被覆盖 */
   HAL_UARTEx_ReceiveToIdle_IT(&huart3, USART3_RxBuff, BSP_WIFI_RX_BUF_SIZE - 1);
 
-  Cloud_Init();                     /* 云端层初始化：清手动状态 */
-	
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -395,6 +422,10 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* 让出 1ms：主循环全速跑的话 CPU 100% 占用在 168MHz，
+       除了发热没有任何收益 —— 所有实时性靠中断（TIM2 刷屏、USART3 收包）。
+       1ms 也保证了每圈至少过一次 SysTick，Tick_Ms 的时间判断不会被密集轮询。 */
+    HAL_Delay(1);
   }
 
   /* USER CODE END 3 */

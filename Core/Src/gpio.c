@@ -58,7 +58,7 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOC, LED3_Pin|MOTOR_Pin|LED2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);   /* 初值改成灭：原来是 SET，上电会闪一下 */
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SMG_LATCH_GPIO_Port, SMG_LATCH_Pin, GPIO_PIN_RESET);
@@ -104,7 +104,7 @@ void MX_GPIO_Init(void)
 // 点亮LED1：引脚输出高电平 → NPN三极管导通 → 灯亮
 void LED1ON(void)
 {
-    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);   /* 初值改成灭：原来是 SET，上电会闪一下 */
 }
 
 // 熄灭LED1：引脚输出低电平 → 三极管截止 → 灯灭

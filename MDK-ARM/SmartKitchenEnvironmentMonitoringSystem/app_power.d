@@ -30,4 +30,4 @@ smartkitchenenvironmentmonitoringsystem/app_power.o: \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h \
-  ..\Core\Inc\app_power.h ..\Core\Inc\bsp_adc.h
+  ..\Core\Inc\app_power.h ..\Core\Inc\bsp_adc.h ..\Core\Inc\bsp_tick.h

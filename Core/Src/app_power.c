@@ -1,6 +1,7 @@
 #include "main.h"           /* HAL 基础 */
 #include "app_power.h"      /* 自己的头：ADC_VREF / VOLT_DIV_RATIO 等宏 */
 #include "bsp_adc.h"        /* Adc_Init / Adc_GetAvg / ADC_CH_* */
+#include "bsp_tick.h"      /* Tick_Expired —— Power_Task 的采样节流 */
 
 /* ==================== 内部状态 ==================== */
 static float   s_volt     = 0.0f;
@@ -38,6 +39,17 @@ void Power_Task(void)
     uint16_t raw_volt;
     uint16_t raw_curr;
     float    v_pin;
+    static uint32_t s_t_last = 0;
+
+    /* ⚠️ 必须节流，否则滑动平均形同虚设。
+     * 主循环一圈只有几微秒，ADC 一轮转换（2 通道 × 84 cycles）约 8µs，
+     * 不节流的话 Adc_GetAvg 塞进窗口的 8 个样本全挤在 40µs 内 ——
+     * 覆盖不到几次转换，等于把同一个数复制了 8 遍，一点滤波效果都没有，
+     * 读数该跳还是跳。
+     * 10ms 一次：8 个样本跨 80ms，覆盖上万次转换，取到的才是真正分散的样本。 */
+    if (!Tick_Expired(&s_t_last, 10u)) {
+        return;
+    }
 
     /* ---- 第一步：取滤波后的原始值 ---- */
     raw_volt = Adc_GetAvg(ADC_CH_VOLT);
