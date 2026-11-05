@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;..\Core\Inc</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1379,6 +1379,11 @@
               <FileType>1</FileType>
               <FilePath>..\Core\Src\bsp_adc.c</FilePath>
             </File>
+            <File>
+              <FileName>bsp_wifi.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\bsp_wifi.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1413,6 +1418,11 @@
               <FileName>app_power.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\app_power.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_cloud.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\app_cloud.c</FilePath>
             </File>
           </Files>
         </Group>

@@ -5,7 +5,7 @@
 #include "bsp_beep.h"
 #include "bsp_fan.h"
 #include "bsp_tick.h"
-
+#include "app_cloud.h"
 static SysState_t s_cur      = SYS_NORMAL;
 static uint8_t    s_silenced = 0;
 
@@ -76,44 +76,12 @@ void Alarm_ToggleSilence(void)
 
 void Alarm_Apply(SysState_t st)
 {
-    /* TODO 8（约 20 行）
-     * 先判断状态是否真的变了：
-     *     if (st == s_cur) return;      ← 没变就啥也不干，省得重置闪烁
-     *     s_cur = st;
-     *
-     * 然后按 st 分三支，每支都要做"先把上一态的痕迹清掉，再设新的"：
-     *
-     *   case SYS_ALARM:
-     *       Led_Off(LED_ID_L1);
-     *       Led_Off(LED_ID_L2);
-     *       Led_BlinkStart(LED_ID_L3, LED_BLINK_MS);    ← 1Hz 闪
-     *       s_silenced = 0;                              ← 新报警取消静音
-     *       （蜂鸣器不在这里开 —— 见 TODO 10，由 Task 管）
-     *       break;
-     *
-     *   case SYS_WARN:
-     *       Led_BlinkStop(LED_ID_L3);    ← 先停闪，否则它一直在闪
-     *       Led_Off(LED_ID_L1);
-     *       Led_On(LED_ID_L2);           ← 常亮
-     *       Beep_Stop();                 ← WARN 不响
-     *       break;
-     *
-     *   case SYS_NORMAL:
-     *       Led_BlinkStop(LED_ID_L3);
-     *       Led_Off(LED_ID_L2);
-     *       Led_On(LED_ID_L1);           ← 常亮
-     *       Beep_Stop();
-     *       break;
-     *
-     * ⚠️ 每个 case 都要把三个灯都安排到确定状态。
-     *    只关自己想关的，会留下上一态的灯还亮着（比如 ALARM→NORMAL，
-     *    LED3 如果没 BlinkStop 会一直闪）。
-     */
-			if (st == s_cur) return;     
-          s_cur = st;
+    if (st == s_cur) return;     /* 状态没变什么都不做 */
+    s_cur = st;
 					
 			switch(st){
 					case SYS_ALARM:
+					Cloud_ManualExit();             /* ★ 进报警强制退出手动，安全优先 */
 					Led_Off(LED_ID_L1);
 					Led_Off(LED_ID_L2);
 					Led_BlinkStart(LED_ID_L3, LED_BLINK_MS);
@@ -127,7 +95,10 @@ void Alarm_Apply(SysState_t st)
 					Led_Off(LED_ID_L1);
 					Led_On(LED_ID_L2);
 					Beep_Stop();
-					Fan_SetSpeed(FAN_SPEED_MID);    /* ← TODO 9：温湿度超限 → 中速换气 */
+					if (!Cloud_IsFanOverridden())   /* ★ 手动接管时不动风扇 */
+					{
+						Fan_SetSpeed(FAN_SPEED_MID);    /* ← TODO 9：温湿度超限 → 中速换气 */
+					}
 					MOTOR_OFF();                    /* ← 预警不开发电机 */
 					break;
 
@@ -136,7 +107,10 @@ void Alarm_Apply(SysState_t st)
 					Led_Off(LED_ID_L2);
 					Led_On(LED_ID_L1);
 					Beep_Stop();
-					Fan_Off();                      /* ← TODO 9：正常 → 停转 */
+					if (!Cloud_IsFanOverridden())   /* ★ 手动接管时不动风扇 */
+					{
+						Fan_Off();                      /* ← TODO 9：正常 → 停转 */
+					}
 					MOTOR_OFF();                    /* ← 正常：马达停 */
 					break;
 					}

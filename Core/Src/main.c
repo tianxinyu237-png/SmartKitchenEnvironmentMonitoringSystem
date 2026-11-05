@@ -42,6 +42,8 @@
 #include "alarm.h"
 #include "drv_sht20.h"       /* 温湿度传感器，非阻塞状态机 */
 #include "drv_ap3216c.h"    /* 光照+接近传感器，寄存器式 I2C */
+#include "bsp_wifi.h"        /* ESP8266，USART3 */
+#include "app_cloud.h"       /* 云端应用层，需求 12/13 */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -252,39 +254,27 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_USART6_UART_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
-    Tick_Init();
-    Log_Init();
-    Log_Boot();
-    /* ---- 临时：I2C 器件扫描（确认 AP3216C/SHT20 在不在，验完删）---- */
-    {
-        uint8_t a;
-        printf("I2C scan start\r\n");
-        for (a = 0x08u; a <= 0x77u; a++) {
-            if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)((uint16_t)a << 1u),
-                                      2u, 5u) == HAL_OK) {
-                printf("  ACK 0x%02X\r\n", a);
-            }
-        }
-        printf("I2C scan done\r\n");
-    }
-    Led_Init();        /* 三个灯全灭，LED1 初值是 SET 必须关 */
-		Key_Init();
-    Smg_Init();                 /* 启动 TIM2 1ms 中断，数码管开始扫描 */
-    Beep_Init();                /* 蜂鸣器先哑着 */
-		Fan_Init();
-    Flame_Init();               /* PB3 火焰 + PB4 人体红外，双边沿 EXTI */
-		Power_Init();            /* ← 新增：启动 ADC + DMA */
-		App_State_Init();           
-    Alarm_Init();               
-    Sht20_Init();               /* 温湿度状态机归位，不碰硬件 */
-    Ap3216_Init();              /* ← 新增：写 0x00=0x03，激活 ALS+PS+IR */
+	
+	/* ... 你原有的初始化 ... */
+
+  /* 挂上 ESP8266 接收。只挂这一次 ——
+     回调里每帧结束会自己重新挂，多挂一次会导致第一帧被覆盖 */
+  HAL_UARTEx_ReceiveToIdle_IT(&huart3, USART3_RxBuff, BSP_WIFI_RX_BUF_SIZE - 1);
+
+  Cloud_Init();                     /* 云端层初始化：清手动状态 */
+	
+  /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
   while (1)
   {
+		 /* ==================== ⓪ 网络（最前面，非阻塞）==================== */
+    Wifi_Task();                     /* 推进连接状态机，每圈一步，不阻塞 */
+    Cloud_Task();                    /* 收指令 + 上传，内部节流 */
     /* ==================== ① 按键采样（必须早于取事件）==================== */
     Key_Scan();                          /* 产生按下事件，下面才有得取 */
 
