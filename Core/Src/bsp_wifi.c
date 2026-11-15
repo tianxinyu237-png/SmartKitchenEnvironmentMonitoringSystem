@@ -16,9 +16,24 @@
  * ==========================================================================*/
 
 #include "bsp_wifi.h"
+#include "ui_custom.h"   /* g_ui_wifi_ssid / g_ui_wifi_pwd / g_ui_wifi_connect_req */
 #include "bsp_tick.h"      /* Tick_Expired —— 非阻塞状态机的时间判断靠它 */
 
 int connect_flag = 0;              /* 1 = TCP 已建立            */
+
+/* ============================================================
+ * 状态机的持久变量
+ * 原来是 Wifi_Task() 里的 static 局部变量，提到文件级有两个原因：
+ *   ① Wifi_StateName() 要能读到当前状态，static 局部外部看不见
+ *   ② Wifi_Connect() 要能打断它，逻辑更清楚
+ * ============================================================ */
+static WifiState_t      s_st      = WIFI_IDLE;  /* 当前状态 */
+static uint32_t         s_t_mark  = 0;          /* 本步开始时刻(ms) */
+static uint8_t          s_retry   = 0;          /* 本步已重试次数 */
+static uint32_t         s_t_idle  = 0;          /* 进 IDLE 的时刻 */
+
+/* Wifi_Connect() 往里写 1，Wifi_Task() 消费后清 0 */
+static volatile uint8_t s_connect_req = 0u;
 
 
 /* ============================================================
@@ -135,6 +150,84 @@ int WIFI_SendData(const char *data)
 
 
 /* ============================================================
+ * 对外接口：请求连接 / 查询状态
+ *
+ * 设计原则：调用方只置标志，真正干活的是 Wifi_Task()。
+ * 所以这几个函数都是"立刻返回"，绝不会卡住调用它的任务。
+ * ============================================================ */
+
+/* 设置要连的 SSID / 密码（写进 UI 层那两个全局，空串表示回落到宏） */
+void Wifi_SetCredential(const char *ssid, const char *pwd)
+{
+    if (ssid != NULL) {
+        strncpy(g_ui_wifi_ssid, ssid, UI_WIFI_SSID_MAX - 1);
+        g_ui_wifi_ssid[UI_WIFI_SSID_MAX - 1] = '\0';
+    }
+    if (pwd != NULL) {
+        strncpy(g_ui_wifi_pwd, pwd, UI_WIFI_PWD_MAX - 1);
+        g_ui_wifi_pwd[UI_WIFI_PWD_MAX - 1] = '\0';
+    }
+}
+
+/* 请求发起一次完整连接：
+ *     AT+RST -> CWMODE -> CWAUTOCONN -> CWJAP -> CIPMUX -> CIPMODE
+ *            -> CIPSTART(TCP) -> CIPSEND(进透传)
+ *
+ * ★ 特性（三条都很重要）：
+ *   ① 不阻塞。只是置一个标志，几微秒返回。
+ *      真正推进由 Wifi_Task() 在 WifiTaskEntry 里循环完成。
+ *   ② 可以反复调。不管当前卡在哪一步，下一次 Wifi_Task() 都会从头重来。
+ *      这就是"手动重连"按钮的实现方式。
+ *   ③ main() 里在 MX_FREERTOS_Init() 之前调也没问题 —— 那时只是置标志，
+ *      等 osKernelStart() 之后 WifiTaskEntry 首次跑 Wifi_Task() 才生效。
+ *
+ * 用法：
+ *     Wifi_Connect();                         // 用 WiFi 页里输的，没输则用 ID/PASSWORD
+ *     Wifi_ConnectTo("MyAP", "12345678");     // 直接指定
+ */
+void Wifi_Connect(void)
+{
+    s_connect_req = 1u;
+}
+
+/* 指定凭据再连接。ssid / pwd 传 NULL 表示该字段保持原值 */
+void Wifi_ConnectTo(const char *ssid, const char *pwd)
+{
+    Wifi_SetCredential(ssid, pwd);
+    s_connect_req = 1u;
+}
+
+/* 1 = TCP 已建立、处于透传态，可以 WIFI_SendData()；0 = 未连上 */
+uint8_t Wifi_IsConnected(void)
+{
+    return (connect_flag != 0) ? 1u : 0u;
+}
+
+/* 当前状态机停在哪一步。串口打状态时用，省得猜 */
+const char *Wifi_StateName(void)
+{
+    switch (s_st)
+    {
+    case WIFI_IDLE:          return "IDLE";
+    case WIFI_SEND_RST:      return "SEND_RST";
+    case WIFI_WAIT_RST:      return "WAIT_RST";
+    case WIFI_SEND_CWMODE:   return "SEND_CWMODE";
+    case WIFI_SEND_AUTOCONN: return "SEND_AUTOCONN";
+    case WIFI_SEND_JAP:      return "SEND_JAP";
+    case WIFI_WAIT_JAP:      return "WAIT_JAP";
+    case WIFI_SEND_MUX:      return "SEND_MUX";
+    case WIFI_SEND_MODE:     return "SEND_MODE";
+    case WIFI_SEND_START:    return "SEND_START";
+    case WIFI_WAIT_START:    return "WAIT_START";
+    case WIFI_SEND_SEND:     return "SEND_SEND";
+    case WIFI_WAIT_SEND:     return "WAIT_SEND";
+    case WIFI_READY:         return "READY";
+    default:                 return "?";
+    }
+}
+
+
+/* ============================================================
  * Wifi_Task() —— ESP8266 连接状态机（非阻塞版）
  *
  * 主循环每圈调一次。每次只做一件事，做完立刻返回。
@@ -144,13 +237,31 @@ int WIFI_SendData(const char *data)
  * ============================================================ */
 void Wifi_Task(void)
 {
-    /* 这四个必须 static —— 要跨调用保持 */
-    static WifiState_t st     = WIFI_IDLE;  /* 当前状态。初值 IDLE = 上电先等 1 秒 */
-    static uint32_t    t_mark = 0;          /* 本步开始时刻(ms) */
-    static uint8_t     retry  = 0;          /* 本步已重试次数 */
-    static uint32_t    t_idle = 0;          /* 进 IDLE 的时刻 */
+    /* ★ ① 外部请求连接（上电时 main() 调 Wifi_Connect()，或运行时再调）。
+       比 UI 那条优先：上电第一次跑就靠它起步。 */
+    if (s_connect_req != 0u)
+    {
+        s_connect_req   = 0u;
+        s_retry         = 0;
+        g_wifi_passthru = 0;
+        connect_flag    = 0;
+        Wifi_FlushRx();
+        u1_USART("[WIFI] connect requested, start from reset\r\n");
+        s_st = WIFI_SEND_RST;
+    }
 
-    switch (st)
+    /* ★ ② 用户在 WiFi 页点了「登录」：不管现在卡在哪一步，立刻从头重来。
+       放在 switch 之前，所以任何一个状态都能被这一下打断。 */
+    if (g_ui_wifi_connect_req != 0u)
+    {
+        g_ui_wifi_connect_req = 0u;
+        s_retry = 0;
+        u1_USART("[WIFI] user reconnect: ssid=%s pwd_len=%u\r\n",
+                 g_ui_wifi_ssid, (unsigned)strlen(g_ui_wifi_pwd));
+        s_st = WIFI_SEND_RST;
+    }
+
+    switch (s_st)
     {
     /* ==================== 空闲喘息 ==================== */
     case WIFI_IDLE:
@@ -159,7 +270,7 @@ void Wifi_Task(void)
         g_wifi_passthru = 0;
         connect_flag    = 0;
 
-        if (Tick_Expired(&t_idle, 1000))    /* 等够 1 秒 */
+        if (Tick_Expired(&s_t_idle, 1000))    /* 等够 1 秒 */
         {
             /* 环形队列溢出 = 下行比主循环快，或主循环被谁拖住了。
                不报出来就永远发现不了丢指令 —— 这是最难查的一类问题。 */
@@ -169,8 +280,8 @@ void Wifi_Task(void)
                          (unsigned long)s_overflow);
                 s_overflow = 0u;
             }
-            retry = 0;
-            st    = WIFI_SEND_RST;          /* 从头开始 */
+            s_retry = 0;
+            s_st    = WIFI_SEND_RST;          /* 从头开始 */
         }
         break;
 
@@ -180,22 +291,24 @@ void Wifi_Task(void)
            这一步不用 Wifi_AtCmd：重启中的模组不一定来得及回显。 */
         At_Clear();
         ESP8266_USART("AT+RST\r\n");
-        t_mark = HAL_GetTick();
-        st     = WIFI_WAIT_RST;
+        s_t_mark = HAL_GetTick();
+        s_st     = WIFI_WAIT_RST;
         break;
-
+			
     case WIFI_WAIT_RST:
         if (At_FindLine((const char *)USART3_RxBuff, "ready"))
         {
             u1_USART("1. reset OK\r\n");
-            retry = 0;
-            st    = WIFI_SEND_CWMODE;
+            s_retry = 0;
+            s_st    = WIFI_SEND_CWMODE;
         }
-        else if (Tick_Expired(&t_mark, 5000))           /* 5 秒超时 */
+        else if (Tick_Expired(&s_t_mark, 5000))           /* 5 秒超时 */
         {
-            u1_USART("1. reset FAILED\r\n");
-            if (++retry < 3) { st = WIFI_SEND_RST; }    /* 重试同一步 */
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            u1_USART("1. reset FAILED  len=%u rxstate=%d\r\n",
+                     (unsigned)USART3_RxCounter, (int)huart3.RxState);
+
+            if (++s_retry < 3) { s_st = WIFI_SEND_RST; }    /* 重试同一步 */
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
         break;
 
@@ -204,14 +317,14 @@ void Wifi_Task(void)
         if (Wifi_AtCmd("AT+CWMODE=1\r\n", "OK", 3000) == 0)   /* 1 = STA，当客户端 */
         {
             u1_USART("2. CWMODE OK\r\n");
-            retry = 0;
-            st    = WIFI_SEND_AUTOCONN;
+            s_retry = 0;
+            s_st    = WIFI_SEND_AUTOCONN;
         }
         else
         {
             u1_USART("2. CWMODE FAILED\r\n");
-            if (++retry < 3) { st = WIFI_SEND_CWMODE; }
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            if (++s_retry < 3) { s_st = WIFI_SEND_CWMODE; }
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
         break;
 
@@ -220,14 +333,14 @@ void Wifi_Task(void)
         if (Wifi_AtCmd("AT+CWAUTOCONN=0\r\n", "OK", 3000) == 0)   /* 关自动连接 */
         {
             u1_USART("3. CWAUTOCONN OK\r\n");
-            retry = 0;
-            st    = WIFI_SEND_JAP;
+            s_retry = 0;
+            s_st    = WIFI_SEND_JAP;
         }
         else
         {
             u1_USART("3. CWAUTOCONN FAILED\r\n");
-            if (++retry < 3) { st = WIFI_SEND_AUTOCONN; }
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            if (++s_retry < 3) { s_st = WIFI_SEND_AUTOCONN; }
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
         break;
 
@@ -235,9 +348,11 @@ void Wifi_Task(void)
     case WIFI_SEND_JAP:
         At_Clear();
         /* SSID 和密码都要双引号括起来 */
-        ESP8266_USART("AT+CWJAP=\"%s\",\"%s\"\r\n", ID, PASSWORD);
-        t_mark = HAL_GetTick();
-        st     = WIFI_WAIT_JAP;             /* ★ 发完立刻返回，这里绝不能等 */
+        ESP8266_USART("AT+CWJAP=\"%s\",\"%s\"\r\n",
+                      (g_ui_wifi_ssid[0] != '\0') ? g_ui_wifi_ssid : ID,
+                      (g_ui_wifi_pwd[0]  != '\0') ? g_ui_wifi_pwd  : PASSWORD);
+        s_t_mark = HAL_GetTick();
+        s_st     = WIFI_WAIT_JAP;             /* ★ 发完立刻返回，这里绝不能等 */
         break;
 
     case WIFI_WAIT_JAP:
@@ -247,21 +362,21 @@ void Wifi_Task(void)
             At_FindLine((const char *)USART3_RxBuff, "WIFI GOT IP"))
         {
             u1_USART("4. join AP OK\r\n");
-            retry = 0;
-            st    = WIFI_SEND_MUX;
+            s_retry = 0;
+            s_st    = WIFI_SEND_MUX;
         }
         else if (At_FindLine((const char *)USART3_RxBuff, "FAIL") ||
                  At_FindLine((const char *)USART3_RxBuff, "ERROR"))   /* 密码错立刻 FAIL */
         {
             u1_USART("4. join AP FAILED (ssid or pwd)\r\n");
-            if (++retry < 3) { st = WIFI_SEND_JAP; }
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            if (++s_retry < 3) { s_st = WIFI_SEND_JAP; }
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
-        else if (Tick_Expired(&t_mark, 30000))
+        else if (Tick_Expired(&s_t_mark, 30000))
         {
             u1_USART("4. join AP TIMEOUT\r\n");
-            if (++retry < 3) { st = WIFI_SEND_JAP; }
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            if (++s_retry < 3) { s_st = WIFI_SEND_JAP; }
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
         break;
 
@@ -270,14 +385,14 @@ void Wifi_Task(void)
         if (Wifi_AtCmd("AT+CIPMUX=0\r\n", "OK", 3000) == 0)   /* 0 = 单连接，透传必须 */
         {
             u1_USART("5. CIPMUX OK\r\n");
-            retry = 0;
-            st    = WIFI_SEND_MODE;
+            s_retry = 0;
+            s_st    = WIFI_SEND_MODE;
         }
         else
         {
             u1_USART("5. CIPMUX FAILED\r\n");
-            if (++retry < 3) { st = WIFI_SEND_MUX; }
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            if (++s_retry < 3) { s_st = WIFI_SEND_MUX; }
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
         break;
 
@@ -286,14 +401,14 @@ void Wifi_Task(void)
         if (Wifi_AtCmd("AT+CIPMODE=1\r\n", "OK", 3000) == 0)  /* 1 = 开透传 */
         {
             u1_USART("6. CIPMODE OK\r\n");
-            retry = 0;
-            st    = WIFI_SEND_START;
+            s_retry = 0;
+            s_st    = WIFI_SEND_START;
         }
         else
         {
             u1_USART("6. CIPMODE FAILED\r\n");
-            if (++retry < 3) { st = WIFI_SEND_MODE; }
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            if (++s_retry < 3) { s_st = WIFI_SEND_MODE; }
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
         break;
 
@@ -303,8 +418,8 @@ void Wifi_Task(void)
            失败时常常只给 ERROR 或干脆不回，用整行比对更稳 */
         At_Clear();
         ESP8266_USART("AT+CIPSTART=\"TCP\",\"%s\",%d\r\n", ServerIP, ServerPort);
-        t_mark = HAL_GetTick();
-        st     = WIFI_WAIT_START;
+        s_t_mark = HAL_GetTick();
+        s_st     = WIFI_WAIT_START;
         break;
 
     case WIFI_WAIT_START:
@@ -313,21 +428,21 @@ void Wifi_Task(void)
             At_FindLine((const char *)USART3_RxBuff, "OK"))
         {
             u1_USART("7. TCP OK\r\n");
-            retry = 0;
-            st    = WIFI_SEND_SEND;
+            s_retry = 0;
+            s_st    = WIFI_SEND_SEND;
         }
         else if (At_FindLine((const char *)USART3_RxBuff, "ERROR") ||
                  At_FindLine((const char *)USART3_RxBuff, "CLOSED"))
         {
             u1_USART("7. TCP FAILED\r\n");
-            if (++retry < 3) { st = WIFI_SEND_START; }
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            if (++s_retry < 3) { s_st = WIFI_SEND_START; }
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
-        else if (Tick_Expired(&t_mark, 10000))          /* TCP 建链给 10 秒 */
+        else if (Tick_Expired(&s_t_mark, 10000))          /* TCP 建链给 10 秒 */
         {
             u1_USART("7. TCP TIMEOUT\r\n");
-            if (++retry < 3) { st = WIFI_SEND_START; }
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            if (++s_retry < 3) { s_st = WIFI_SEND_START; }
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
         break;
 
@@ -335,8 +450,8 @@ void Wifi_Task(void)
     case WIFI_SEND_SEND:
         At_Clear();
         ESP8266_USART("AT+CIPSEND\r\n");    /* ★ 不带数字才是进透传 */
-        t_mark = HAL_GetTick();
-        st     = WIFI_WAIT_SEND;
+        s_t_mark = HAL_GetTick();
+        s_st     = WIFI_WAIT_SEND;
         break;
 
     case WIFI_WAIT_SEND:
@@ -361,16 +476,16 @@ void Wifi_Task(void)
 
             g_wifi_passthru = 1;            /* 3) */
             connect_flag    = 1;            /* 4) 全工程靠它判断能不能发数据 */
-            retry           = 0;
-            st              = WIFI_READY;
+            s_retry           = 0;
+            s_st              = WIFI_READY;
             u1_USART("8. WiFi ready, transparent mode on\r\n");
         }
         else if (At_FindLine((const char *)USART3_RxBuff, "ERROR") ||
-                 Tick_Expired(&t_mark, 5000))
+                 Tick_Expired(&s_t_mark, 5000))
         {
             u1_USART("8. enter transparent FAILED\r\n");
-            if (++retry < 3) { st = WIFI_SEND_SEND; }
-            else { st = WIFI_IDLE; t_idle = HAL_GetTick(); retry = 0; }
+            if (++s_retry < 3) { s_st = WIFI_SEND_SEND; }
+            else { s_st = WIFI_IDLE; s_t_idle = HAL_GetTick(); s_retry = 0; }
         }
         break;
 
@@ -381,10 +496,10 @@ void Wifi_Task(void)
            如果这里不看它，状态机会永远卡在 READY，断线后再也不重连。 */
         if (!connect_flag)              /* ★ 链路被 Cloud 层判定断开 */
         {
-            retry           = 0;
+            s_retry           = 0;
             g_wifi_passthru = 0;        /* 退回 AT 阶段，否则 AT 回应进错通道 */
             Wifi_FlushRx();
-            st              = WIFI_SEND_RST;      /* 重新走八步 */
+            s_st              = WIFI_SEND_RST;      /* 重新走八步 */
             u1_USART("link reset, reconnecting\r\n");
         }
         break;

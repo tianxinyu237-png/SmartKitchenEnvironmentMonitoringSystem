@@ -53,14 +53,29 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+extern uint8_t s_demo_alarm;
+void Ui_Task(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define LCD_RST_Pin GPIO_PIN_2
+#define LCD_RST_GPIO_Port GPIOE
+#define LCD_TE_Pin GPIO_PIN_1
+#define LCD_TE_GPIO_Port GPIOE
 #define BEEP_Pin GPIO_PIN_15
 #define BEEP_GPIO_Port GPIOA
+#define LCD_BL_Pin GPIO_PIN_5
+#define LCD_BL_GPIO_Port GPIOE
+#define LCD_MOSI_Pin GPIO_PIN_3
+#define LCD_MOSI_GPIO_Port GPIOI
+#define LCD_MISO_Pin GPIO_PIN_2
+#define LCD_MISO_GPIO_Port GPIOI
 #define LED3_Pin GPIO_PIN_13
 #define LED3_GPIO_Port GPIOC
+#define LCD_SCK_Pin GPIO_PIN_1
+#define LCD_SCK_GPIO_Port GPIOI
+#define LCD_NSS_Pin GPIO_PIN_0
+#define LCD_NSS_GPIO_Port GPIOI
 #define KEY1_Pin GPIO_PIN_9
 #define KEY1_GPIO_Port GPIOC
 #define KEY2_Pin GPIO_PIN_8

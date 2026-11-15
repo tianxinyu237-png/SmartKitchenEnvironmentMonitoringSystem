@@ -1,0 +1,16 @@
+{
+  "codename": "KaiTi22",
+  "ttf_path": "/assets/AlimamaDongFangDaKai-Regular.ttf",
+  "bin_path": "/assets\\ui_font_KaiTi22.bin",
+  "c_path": "/assets\\ui_font_KaiTi22.c",
+  "cfg_path": "/assets\\ui_font_KaiTi22.fcfg",
+  "size": 22,
+  "bpp": 4,
+  "letters": 0,
+  "ranges": [
+    "0x20-0x7f"
+  ],
+  "symbols": "智能厨房环境监控终端，温度，湿度，光照，电压，电流，正常，风扇，关闭，WiFi已连,°C，设置，温度阈值，湿度阈值，报警项使能，明火，用电，报警，返回，代码查询，共，条，账号，密码，设置页，首页，警告页",
+  "customparams": "--no-compress --no-prefilter",
+  "uploaded": false
+}

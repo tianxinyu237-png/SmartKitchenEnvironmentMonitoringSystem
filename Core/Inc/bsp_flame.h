@@ -33,4 +33,7 @@ uint8_t  Pir_GetLevel(void);            /* 人体红外当前电平 0/1 */
 uint8_t  Pir_IsActive(void);            /* 1 = 检测到人 */
 uint32_t Pir_GetCount(void);            /* 人体红外累计触发次数 */
 
+// bsp_flame.h 声明
+void bsp_flame_irq_update(void);
+void bsp_pir_irq_update(void);
 #endif /* __BSP_FLAME_H */

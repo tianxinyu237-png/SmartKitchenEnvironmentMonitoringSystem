@@ -2,7 +2,7 @@
 #include "app_power.h"      /* 自己的头：ADC_VREF / VOLT_DIV_RATIO 等宏 */
 #include "bsp_adc.h"        /* Adc_Init / Adc_GetAvg / ADC_CH_* */
 #include "bsp_tick.h"      /* Tick_Expired —— Power_Task 的采样节流 */
-
+#include "stdio.h"
 /* ==================== 内部状态 ==================== */
 static float   s_volt     = 0.0f;
 /*  ↑ 最近一次算出的电压（V）
@@ -61,7 +61,7 @@ void Power_Task(void)
      *    ⚠️ 顺序容易搞反！所以这里两个都用宏，不写 0/1 */
 
     /* ---- 第二步：换算电压 ---- */
-    v_pin = (float)raw_volt / ADC_FULL * ADC_VREF;
+		v_pin   = (float)raw_volt / ADC_FULL * ADC_VREF;   /* raw/4095 × 3.3 → 引脚电压 0~3.3V */
     /*  ↑ 三个要点：
      *    ① (float) 强转不能省 —— raw_volt 是 uint16_t，不转的话
      *       raw_volt / 4095.0f 会先…… 其实这里因为 4095.0f 是浮点，
@@ -73,7 +73,16 @@ void Power_Task(void)
      *       两种都行，这里按「先归一化再缩放」的直觉写
      *    ③ 结果是引脚上的电压，范围 0~3.3V */
 
-    s_volt   = v_pin * VOLT_DIV_RATIO;
+
+		/* app_power.c 第 76 行之后，临时加 */
+		printf("[PWR] raw_v=%u v_pin=%d mV  volt=%d mV  raw_i=%u curr=%d mA\r\n",
+       (unsigned)raw_volt,
+       (int)(v_pin * 1000.0f),
+       (int)(s_volt * 1000.0f),
+       (unsigned)raw_curr,
+       (int)s_curr_ma);
+		
+    s_volt  = v_pin * VOLT_DIV_RATIO;           /* × 分压比 → 还原成实际电压 */
     /*  ↑ 乘分压比，还原成「分压之前」的实际电压
      *    这一步全靠 VOLT_DIV_RATIO 正确，错了整个读数就废了 */
 
@@ -103,7 +112,11 @@ void Power_Task(void)
     } else {
         s_abnormal = 0;
     }
+
 }
+
+
+
 
 /*---------------------------------------------------------------------------
  * 读电压（V）

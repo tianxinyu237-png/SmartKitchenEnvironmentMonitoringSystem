@@ -12,7 +12,13 @@ static uint8_t    s_silenced = 0;
 static const uint32_t LED_BLINK_MS = 500u;   /* 500ms 亮 500ms 灭 = 1Hz */
 
 void Alarm_Init(void){
-		s_cur=SYS_NORMAL;
+		/* ★ 必须设成非法值，不能写 SYS_NORMAL。
+		 *   原因：Alarm_Apply() 第一行是 `if (st == s_cur) return;`，
+		 *   上电第一圈传进来的就是 SYS_NORMAL（App_State_Init 里 s_state 也是 NORMAL），
+		 *   两边相等 → 整个 switch 被跳过 → case SYS_NORMAL 里的
+		 *   Led_On(LED_ID_L1) 永远不执行 → 正常态下 LED1 不亮。
+		 *   塞 0xFF 逼第一次 Apply 无条件走一遍分支，跟 Alarm_Reset() 同一个套路。 */
+		s_cur=(SysState_t)0xFF;
 		s_silenced =0 ;
 		
 		/* 三个灯全灭、蜂鸣器静音、风扇停、马达停 */
@@ -42,6 +48,14 @@ void Alarm_Silence(void)
 {
 		s_silenced =1;
 		Beep_Stop();
+	
+		/* ★ 只有真的在报警态才接管风扇/马达。
+       WARN / NORMAL 时这两个本来就不用静音管，
+       乱停会把"温湿度超限要通风"这个正常功能一起关掉。 */
+		if(s_cur == SYS_ALARM){
+				Fan_Off();
+				MOTOR_OFF();
+		}
 }
 
 /* 静音 ⇄ 报警 来回切换（绑 KEY3，演示用）
@@ -64,12 +78,22 @@ void Alarm_ToggleSilence(void)
     s_silenced = (uint8_t)(s_silenced ^ 1u);
 
     if (s_silenced != 0u) {
-        Beep_Stop();                     /* 切到静音：立刻掐掉当前这一声 */
+        Beep_Stop();     /* 切到静音：立刻掐掉当前这一声 */
+				if(s_cur == SYS_ALARM){		/*报警态才接管*/
+						Fan_Off();
+						MOTOR_OFF();
+				}
     } else if (s_cur != SYS_ALARM) {
         /* 非报警态按了第二次（s_silenced 回到 0）—— 没有 Alarm_Task 会来响，
          * 所以这里手动补两声，让每次按键都有明确反馈 */
         Beep_Beep(2u, 150u, 150u);
-    }
+    }else{
+				/* ★ 报警态 + 取消静音：把风扇马达拉回来。
+           蜂鸣器不在这里开 —— 交给 Alarm_Task 下一圈自己重响，
+           在这里开会和 Task 抢，响声乱掉。 */
+        Fan_SetSpeed(FAN_SPEED_FULL);
+        MOTOR_ON();
+		}
     /* 报警态且 s_silenced==0：交给 Alarm_Task 下一圈自动重响，别在这抢 */
 }
 
@@ -129,6 +153,23 @@ void Alarm_Apply(SysState_t st)
 
 void Alarm_Task(void)
 {
+	
+	
+		/* ★ 静音兜底：状态保持型输出，每圈压一次。
+       为什么用静态标志：MOTOR_ON/OFF 是直接写 GPIO 的函数，
+       每圈无条件调会白白反复写寄存器；记住"已经压过了"就不再碰。 */
+    static uint8_t s_out_muted = 0u;
+		if (s_cur == SYS_ALARM && s_silenced) {
+        if (!s_out_muted) {
+            if (Fan_GetSpeed() != 0u) Fan_Off();
+            MOTOR_OFF();
+            s_out_muted = 1u;           /* 压过了，别每圈重复写 */
+        }
+        return;                          /* 静音态不响 */
+    }
+    s_out_muted = 0u;                    /* 一旦不静音，下次进来重新压 */
+		
+		
     /* 蜂鸣器间歇鸣叫（需求：ALARM 时响，但不能长鸣不关）
      * 只在 ALARM 且没被消音时干活。
      * ⚠️ 用 Beep_IsBusy() 判断：如果每圈都调 Beep_Beep()，remain 被不断

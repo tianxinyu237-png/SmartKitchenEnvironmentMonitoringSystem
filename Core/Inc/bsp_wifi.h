@@ -83,6 +83,25 @@ typedef enum {
 /* 主循环每圈调一次。绝不阻塞，最坏几微秒。 */
 void    Wifi_Task(void);
 
+/* ---- 连接接口：调用方只置标志，实际连接由 Wifi_Task() 推进 ---- */
+
+/* 请求发起一次完整连接（AT+RST -> ... -> CIPSEND 进透传）。
+ * 不阻塞、可反复调用；任何时刻调都会打断当前流程从头重来。
+ * main() 里在 MX_FREERTOS_Init() 之前调用也有效（等任务跑起来才生效）。 */
+void    Wifi_Connect(void);
+
+/* 指定 SSID/密码再连接。传 NULL 表示该字段保持原值。 */
+void    Wifi_ConnectTo(const char *ssid, const char *pwd);
+
+/* 单独改凭据，不触发连接 */
+void    Wifi_SetCredential(const char *ssid, const char *pwd);
+
+/* 1 = TCP 已建立、透传中，可以 WIFI_SendData()；0 = 未连上 */
+uint8_t Wifi_IsConnected(void);
+
+/* 当前状态机停在哪一步的字符串名，串口打状态用 */
+const char *Wifi_StateName(void);
+
 /* 从业务行队列取一行，行尾 CR/LF 已剥掉。
  * 返回 1 = 取到（out 以 0 结尾）；0 = 队列空。 */
 uint8_t Wifi_TakeFrame(char *out, uint16_t out_size);

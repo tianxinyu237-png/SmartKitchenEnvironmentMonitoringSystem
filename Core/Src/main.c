@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 #include "adc.h"
 #include "dma.h"
 #include "i2c.h"
@@ -44,6 +45,17 @@
 #include "drv_ap3216c.h"    /* 光照+接近传感器，寄存器式 I2C */
 #include "bsp_wifi.h"        /* ESP8266，USART3 */
 #include "app_cloud.h"       /* 云端应用层，需求 12/13 */
+
+#include "bsp_ft6336.h"
+#include "bsp_ili9341_4line.h"
+
+#include "lvgl.h"
+#include "lv_port_disp.h"
+#include "lv_port_indev.h"
+
+#include "stdio.h"
+#include "ui.h"
+#include "ui_custom.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -70,13 +82,14 @@
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static uint8_t s_demo_alarm = 0;   /* 1 = KEY3 手动演示报警中（绕过真实状态机）
+uint8_t s_demo_alarm = 0;   /* 1 = KEY3 手动演示报警中（绕过真实状态机）
                                     *   放文件作用域是因为 main() 主循环和 Ui_Task()
                                     *   都要看它：主循环决定 Alarm_Apply 传哪个状态，
                                     *   Ui_Task 决定显示报警码还是读数 */
@@ -86,7 +99,7 @@ static uint8_t s_demo_alarm = 0;   /* 1 = KEY3 手动演示报警中（绕过真
  * @note   必须是独立函数 —— 里面用 return 提前退出（报警态覆盖），
  *         若直接写在 while(1) 里，return 会结束 main 让系统停摆。
  */
-static void Ui_Task(void)
+void Ui_Task(void)
 {
     /* ---- 状态变量：static 保证跨圈保留，不加就每圈归零 ---- */
     static uint8_t  s_mode     = 0;      /* 0 = NORMAL   1 = ADMIN */
@@ -216,6 +229,40 @@ static void Ui_Task(void)
     /* ==================== ⑥ NORMAL 上屏：带小数点，常亮 ==================== */
     Smg_ShowDp((uint32_t)n, 1u);         /* 27.63 / 56.37 / 5.00 / 0.20 */
 }
+
+
+void AlarmTask(void *argument)
+{
+    for (;;) {
+        /* ① 按应用层算出来的状态，驱动 LED / 蜂鸣器 / 风扇 / 马达。
+         *    Alarm_Apply 内部第一行就是 if (st == s_cur) return;
+         *    所以这里每 10ms 调一次也不会重复动作，只有状态真正变了才切。 */
+        Alarm_Apply(App_State_Get());
+
+        /* ② 推进时序：LED 闪烁、蜂鸣器间歇鸣叫都是靠这三句每圈翻页 */
+        Alarm_Task();
+        Led_Task();
+        Beep_Task();
+
+        osDelay(10);
+    }
+}
+
+
+
+
+/* ---- 让三屏所有后代对象把手势事件冒泡到 Screen ---- */
+static void ui_gesture_bubble_rec(lv_obj_t *obj)
+{
+    uint32_t n = lv_obj_get_child_cnt(obj);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *c = lv_obj_get_child(obj, i);
+        lv_obj_add_flag(c, LV_OBJ_FLAG_GESTURE_BUBBLE);
+        ui_gesture_bubble_rec(c);
+    }
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -255,7 +302,26 @@ int main(void)
   MX_TIM3_Init();
   MX_USART6_UART_Init();
   MX_USART3_UART_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
+	Wifi_Connect();
+	/* ==================== ⓪ 显示栈（必须在最前面）==================== */
+  /* 顺序不能乱：屏要复位 → LVGL 内核 → 显示驱动 → 输入驱动 → 建控件 */
+	ILI9341_Init();        /* 屏幕硬件复位 + SPI 初始化 */
+	FT6336_init();         /* 触摸芯片 */
+	lv_init();             /* LVGL 内核 */
+	lv_port_disp_init();   /* 注册显示驱动 —— LVGL 靠它知道往哪画 */
+	lv_port_indev_init();  /* 注册输入驱动 */
+	ui_init();             /* 创建三屏所有控件 */
+	App_State_Init();      /* ★ 先把阈值/使能表填上，下面回填才读得到真值 */
+	Ui_BindEvents();       /* ★ 再挂事件并回填（此时 s_th[] = {33,31,60,55}） */
+
+	ui_gesture_bubble_rec(ui_ScreenMain);
+  ui_gesture_bubble_rec(ui_ScreenSetting);
+  ui_gesture_bubble_rec(ui_ScreenAlarm);
+  ui_gesture_bubble_rec(ui_ScreenWifi);
+
+
 
   /* ==================== ① 时钟节拍 ==================== */
   Tick_Init();                      /* 空实现：SysTick 已由 HAL_Init 配好 1ms */
@@ -283,10 +349,39 @@ int main(void)
   Power_Init();                     /* 内含 Adc_Init：启动 ADC + DMA 循环搬运 */
 
   /* ==================== ⑤ 应用层 ==================== */
-  App_State_Init();                 /* ★ 填阈值表。不调的话 s_th[] 全 0，
+  /*App_State_Init();                  ★ 填阈值表。不调的话 s_th[] 全 0，
                                        温度 25 > 0 → 一上电就 WARN */
   Alarm_Init();                     /* s_cur 归位 NORMAL，风扇/马达停 */
   Cloud_Init();                     /* 云端层：清手动覆盖状态 */
+	/* I2C1 先诊断总线（读线电平 + 必要时 9 脉冲解锁），再扫描地址。
+	   两根线都低就别扫了 —— 128 个地址 × 2 次 × 10ms = 2.5 秒白等，
+	   而且它会顶到 WWDG。 */
+	{
+	    uint8_t rc = I2C1_DiagAndRecover();
+	    printf("[I2C1] diag rc=%u (0=OK 1=unlocked 2=hardware)\r\n", (unsigned)rc);
+
+	    if (rc == 2u) {
+	        printf("[I2C1] skip scan: check VCC of SHT20 / AP3216C, and PB6-PB7 wiring\r\n");
+	    } else {
+	        printf("[I2C1] scan start\r\n");
+	        for (uint16_t a = 1; a < 128; a++) {
+	            if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 2, 10) == HAL_OK) {
+	                printf("[I2C1] found 0x%02X\r\n", (unsigned)a);
+	            }
+	        }
+	        printf("[I2C1] scan done\r\n");
+	    }
+	}
+
+	/* I2C2（触摸 FT6336，PH4/PH5）：这条一直通，扫一遍当对照组 */
+	printf("[I2C2] scan start\r\n");
+	for (uint8_t a = 1; a < 128; a++) {
+	    if (HAL_I2C_IsDeviceReady(&hi2c2, (uint16_t)(a << 1), 2, 10) == HAL_OK) {
+	        printf("[I2C2] found 0x%02X\r\n", a);
+	    }
+	}
+	printf("[I2C2] scan done\r\n");
+
 
   /* 挂上 ESP8266 接收。只挂这一次 ——
      回调里每帧结束会自己重新挂，多挂一次会导致第一帧被覆盖 */
@@ -294,140 +389,23 @@ int main(void)
 
   /* USER CODE END 2 */
 
+  /* Init scheduler */
+  osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
+  MX_FREERTOS_Init();
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
   while (1)
   {
-		 /* ==================== ⓪ 网络（最前面，非阻塞）==================== */
-    Wifi_Task();                     /* 推进连接状态机，每圈一步，不阻塞 */
-    Cloud_Task();                    /* 收指令 + 上传，内部节流 */
-    /* ==================== ① 按键采样（必须早于取事件）==================== */
-    Key_Scan();                          /* 产生按下事件，下面才有得取 */
-
-    /* ==================== ② 传感器推进 ==================== */
-    Sht20_Task();                        /* 温湿度状态机，每圈推进一步，不阻塞 */
-    Ap3216_Task();                       /* ← 新增：光照，内部节流 200ms，不阻塞 */
-    if (Sht20_IsReady()) {               /* 第一轮 114ms 没跑完前不喂，避免误判成 0 度 */
-        App_State_SetEnv(Sht20_GetTemp(), Sht20_GetHumi());
-    }
-		Power_Task();                    /* ← 新增：必须在 App_State_Task 之前 */
-
-    /* ==================== ③ 状态计算 ==================== */
-    App_State_Task();                    /* 算状态：ALARM > WARN > NORMAL */
-
-    /* ==================== ④ 动作执行 ==================== */
-    /* s_demo_alarm 时强行传 ALARM，让 Alarm_Apply 走报警分支：
-     *   灯闪 + 蜂鸣器 + 风扇全速 + 马达开。
-     * Alarm_Apply 里有 `if (st == s_cur) return;`，所以只有状态真正
-     * 变化那一圈才动作，不会每圈重复重置。 */
-    Alarm_Apply((s_demo_alarm != 0u) ? SYS_ALARM : App_State_Get());
-    Alarm_Task();                        /* 推进闪烁和间歇鸣叫 */
-    Led_Task();
-    Beep_Task();
-
-    /* ==================== ⑤ 按键响应 + 数码管上屏 ==================== */
-    Ui_Task();                           /* 用本圈最新状态，报警时立刻显示 9999/8888 */
-
-    /* ==================== ⑤.5 状态上报（需求 5/6/7/10）==================== */
-    /* 只在状态「变化」的那一圈打一次，不是每圈刷屏。
-     * s_last_st 初值 -1 是非法状态，保证上电第一圈先打一条基线。
-     * 演示报警（s_demo_alarm）单独跟踪，标 [DEMO] 和真报警区分开。 */
-    {
-        static int32_t s_last_st   = -1;     /* 上次上报的状态；-1 = 还没报过 */
-        static uint8_t s_last_demo = 0xFFu;  /* 上次上报的演示标志 */
-        int32_t    now  = (int32_t)App_State_Get();
-        uint8_t    demo = s_demo_alarm;
-
-        if (now != s_last_st || demo != s_last_demo) {
-            s_last_st   = now;
-            s_last_demo = demo;
-
-            if (demo != 0u) {
-                /* 演示模式：状态机其实是 NORMAL，但视觉上是报警 */
-                printf(">>> STATE: ALARM [DEMO] by KEY3\r\n");
-            } else if (now == (int32_t)SYS_NORMAL) {
-                printf(">>> STATE: NORMAL\r\n");
-            } else if (now == (int32_t)SYS_WARN) {
-                /* 环境预警：把实测值和阈值一起打出来，答辩时一眼看清判据 */
-                printf(">>> WARN : T=%.2fC(Th %.1f/%.1f) RH=%.2f%%(Th %.1f/%.1f)\r\n",
-                       Sht20_GetTemp(),
-                       App_State_GetThreshold(TH_TEMP_HIGH),
-                       App_State_GetThreshold(TH_TEMP_LOW),
-                       Sht20_GetHumi(),
-                       App_State_GetThreshold(TH_HUMI_HIGH),
-                       App_State_GetThreshold(TH_HUMI_LOW));
-            } else {
-                /* SYS_ALARM：按原因分流，明火和用电异常分开报 */
-                AlarmReason_t r = App_State_GetReason();
-                if (r == ALARM_FLAME) {
-                    printf(">>> ALARM: FLAME level=%d cnt=%lu\r\n",
-                           (int)Flame_GetLevel(),
-                           (unsigned long)Flame_GetCount());
-                } else if (r == ALARM_POWER) {
-                    printf(">>> ALARM: POWER V=%.2fV(4.50~5.50) I=%.1fmA(max 250)\r\n",
-                           Power_GetVoltage(), Power_GetCurrent());
-                } else {
-                    printf(">>> ALARM: reason=UNKNOWN\r\n");
-                }
-            }
-        }
-    }
-
-    /* ==================== ⑥ 调试打印（验完删）==================== */
-    {
-        static uint32_t t_f = 0;
-        if (Tick_Expired(&t_f, 1000u)) {
-            printf("F:flame=%lu/%d  pir=%lu/%d\r\n",
-                   (unsigned long)Flame_GetCount(), (int)Flame_GetLevel(),
-                   (unsigned long)Pir_GetCount(),   (int)Pir_GetLevel());
-        }
-    }
-    {
-        static uint32_t s_dbg_sht = 0;
-        if (Tick_Expired(&s_dbg_sht, 1000u)) {
-            printf("SHT T=%.2f RH=%.2f err=%u\r\n",
-                   Sht20_GetTemp(), Sht20_GetHumi(), (unsigned)Sht20_GetErrCount());
-        }
-    }
-    {
-        static uint32_t s_dbg_als = 0;   /* 光照：lux / 原始 ALS / 接近值 / 错误数 */
-        if (Tick_Expired(&s_dbg_als, 1000u)) {
-            printf("ALS lux=%.1f raw=%u ps=%u err=%lu\r\n",
-                   Ap3216_GetLux(),
-                   (unsigned)Ap3216_GetAlsRaw(),
-                   (unsigned)Ap3216_GetPsRaw(),
-                   (unsigned long)Ap3216_GetErrCount());
-        }
-    }
-    {
-        static uint32_t last = 0;        /* 心跳 */
-        if (Tick_Expired(&last, 500u)) {
-            printf("[%lu]tick alive\r\n", (unsigned long)Tick_Ms());
-        }
-    }
-    /* ---- 电压/电流诊断（定位 8888 用，修好后可删）---- */
-    {
-        static uint32_t s_dbg_pwr = 0;
-        if (Tick_Expired(&s_dbg_pwr, 1000u)) {
-            printf("PWR run=%d raw0(I)=%u raw1(V)=%u | V=%.2f I=%.1fmA | abn=%d\r\n",
-                   (int)Adc_IsRunning(),
-                   (unsigned)Adc_GetRaw(ADC_CH_CURR),
-                   (unsigned)Adc_GetRaw(ADC_CH_VOLT),
-                   Power_GetVoltage(), Power_GetCurrent(),
-                   (int)Power_IsAbnormal());
-        }
-    }
-
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* 让出 1ms：主循环全速跑的话 CPU 100% 占用在 168MHz，
-       除了发热没有任何收益 —— 所有实时性靠中断（TIM2 刷屏、USART3 收包）。
-       1ms 也保证了每圈至少过一次 SysTick，Tick_Ms 的时间判断不会被密集轮询。 */
-    HAL_Delay(1);
   }
-
   /* USER CODE END 3 */
 }
 
@@ -480,6 +458,28 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM6 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM6)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.

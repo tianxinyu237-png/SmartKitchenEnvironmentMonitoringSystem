@@ -129,12 +129,14 @@ void Smg_Clear(void)
 
 /* ---- TIM2 1ms 回调。HAL 里是 __weak 空函数，这里重写它 ----
  * 注意：所有定时器的更新中断都进这一个函数，必须判断是哪个 */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance == TIM2) {
-        Smg_Tick();
-    }
-}
+//和main函数中的重定义了
+
+//void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+//{
+//    if (htim->Instance == TIM2) {
+//        Smg_Tick();
+//    }
+//}
 
 
 

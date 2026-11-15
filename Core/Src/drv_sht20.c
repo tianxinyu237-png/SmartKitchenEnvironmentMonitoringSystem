@@ -9,17 +9,18 @@
 #include "drv_sht20.h"
 #include "i2c.h"        /* 提供 extern I2C_HandleTypeDef hi2c1 */
 #include "bsp_tick.h"   /* 提供 Tick_Ms() / Tick_Expired() */
+#include "stdio.h"
 
 /* ---------- 硬件常量（数据手册定死的，别改） ---------- */
 #define SHT20_ADDR_W      0x80u   /* 7 位地址 0x40 左移一位 → HAL 要 8 位写地址 */
 #define SHT20_ADDR_R      0x81u   /* 同上，读地址（最低位 1）                   */
-#define SHT20_CMD_TEMP    0xF3u   /* 测温度，no hold master（不发 SCL，不阻塞） */
-#define SHT20_CMD_HUMI    0xF5u   /* 测湿度，no hold master                     */
+#define SHT20_CMD_TEMP    0xE3u   /* 测温度，no hold master（不发 SCL，不阻塞） */
+#define SHT20_CMD_HUMI    0xE5u   /* 测湿度，no hold master                     */
 
 /* ---------- 时间常量（数据手册最大转换时间） ---------- */
 #define SHT20_TEMP_MS     85u     /* 温度转换最长 85ms                          */
 #define SHT20_HUMI_MS     30u     /* 湿度转换最长 29ms，留 1ms 余量             */
-#define SHT20_I2C_TMO     50u     /* I2C 单次操作超时(ms)，正常 1ms 就回来      */
+#define SHT20_I2C_TMO     200u     /* I2C 单次操作超时(ms)，正常 1ms 就回来      */
 
 /* ---------- 状态机的三个状态 ---------- */
 typedef enum {
@@ -36,9 +37,9 @@ static float        s_humi   = 0.0f;      /* 最近一次成功测到的湿度  
 static uint8_t      s_ready  = 0;         /* 跑完过一整轮没有        */
 static uint32_t     s_err    = 0;         /* I2C 出错次数（调试用）  */
 static uint32_t     s_t_backoff = 0;      /* 出错后的退避时刻        */
-#define SHT20_BACKOFF_MS  500u            /* 出错后等 500ms 再重试
+#define SHT20_BACKOFF_MS  500u            /* 出错后等 500ms 再重试*/
 
- * 为什么必须退避：HAL_I2C_Master_Transmit 失败时要等满 50ms 超时才返回。
+ /* 为什么必须退避：HAL_I2C_Master_Transmit 失败时要等满 50ms 超时才返回。
  * 传感器没插 / 总线被拉死时，不退避就是每圈 50ms，主循环直接被拖成
  * 20Hz —— 数码管刷新、按键响应全跟着卡。 */
 
@@ -101,6 +102,8 @@ void Sht20_Task(void)
         {
             s_err++;                    /* 失败只计数 */
             s_t_backoff = Tick_Ms();    /* 记下失败时刻，IDLE 里据此退避 */
+					  printf("[SHT] cmd TX fail, err=%u\r\n", s_err);   // ← 加这行
+
         }                               /* 绝不 while 重试，绝不卡死      */
         break;
     }
@@ -123,6 +126,8 @@ void Sht20_Task(void)
             s_err++;                    /* 计数                    */
             s_t_backoff = Tick_Ms();    /* 退避起点                */
             s_state = SHT_IDLE;         /* 回起点，退避后重发命令   */
+					  printf("[SHT] temp RX fail, err=%u\r\n", s_err);  // ← 加这行
+
             return;                     /* 这一轮就此作废           */
         }
 
@@ -159,6 +164,7 @@ void Sht20_Task(void)
             s_err++;
             s_t_backoff = Tick_Ms();
             s_state = SHT_IDLE;
+					  printf("[SHT] humi RX fail, err=%u\r\n", s_err);  // ← 加这行
             return;
         }
 

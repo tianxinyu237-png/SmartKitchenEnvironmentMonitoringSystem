@@ -1,0 +1,16 @@
+{
+  "codename": "KaiTi14",
+  "ttf_path": "/assets/AlimamaDongFangDaKai-Regular.ttf",
+  "bin_path": "/assets\\ui_font_KaiTi14.bin",
+  "c_path": "/assets\\ui_font_KaiTi14.c",
+  "cfg_path": "/assets\\ui_font_KaiTi14.fcfg",
+  "size": 14,
+  "bpp": 4,
+  "letters": 0,
+  "ranges": [
+    "0x20-0x7f"
+  ],
+  "symbols": "智能厨房环境监控终端，温度，湿度，光照，电压，电流，正常，风扇，关闭，WiFi已连,°C，设置，温度阈值，湿度阈值，异常，过高报警项使能，明火，用电，报警代码查询，共，条，传感器，消音，报警保持中，故障，断连，系统重启，检测到明火，已全速排风，电压或电流超出安全范围，各项参数均在安全范围，报警保持中，预警中",
+  "customparams": "--no-compress --no-prefilter",
+  "uploaded": false
+}

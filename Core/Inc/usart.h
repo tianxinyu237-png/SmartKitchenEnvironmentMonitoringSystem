@@ -17,7 +17,7 @@
   */
 /* USER CODE END Header */
 /* Define to prevent recursive inclusion -------------------------------------*/
-#ifndef __USART_H__      /* 头文件保护：防止被重复包含导致重定义 */
+#ifndef __USART_H__
 #define __USART_H__
 
 #ifdef __cplusplus
@@ -31,9 +31,9 @@ extern "C" {
 
 /* USER CODE END Includes */
 
-extern UART_HandleTypeDef huart3;   /* USART3：接 ESP8266，115200 8N1 */
+extern UART_HandleTypeDef huart3;
 
-extern UART_HandleTypeDef huart6;   /* USART6：接 PC 调试台，115200 8N1 */
+extern UART_HandleTypeDef huart6;
 
 /* USER CODE BEGIN Private defines */
 /* 和 wifi.c 共用的 ESP8266 接收缓冲区大小。

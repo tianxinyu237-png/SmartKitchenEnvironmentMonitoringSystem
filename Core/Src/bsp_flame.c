@@ -66,27 +66,26 @@ uint32_t Flame_GetCount(void) { return s_flame_cnt; }
 uint32_t Pir_GetCount(void)   { return s_pir_cnt;   }
 
 /* ---- 中断服务：只记录，绝不在这里 printf ---- */
-void EXTI3_IRQHandler(void)
-{
-    HAL_GPIO_EXTI_IRQHandler(FLAME_PIN);
-}
+//在stm32f4xx_it.c
+//函数下EXTI3_IRQHandler 重定义（bsp_flame.c + stm32f4xx_it.c）
+
+//void EXTI3_IRQHandler(void)
+//{
+//    HAL_GPIO_EXTI_IRQHandler(FLAME_PIN);
+//}
 
 void EXTI4_IRQHandler(void)
 {
     HAL_GPIO_EXTI_IRQHandler(PIR_PIN);
 }
 
-/* 覆盖 HAL 的弱函数，一次接管两个源，各记各的 */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+void bsp_flame_irq_update(void)
 {
-    if (GPIO_Pin == FLAME_PIN)
-    {
-        s_flame_cnt++;
-        s_flame_lvl = (uint8_t)HAL_GPIO_ReadPin(FLAME_GPIO_PORT, FLAME_PIN);
-    }
-    else if (GPIO_Pin == PIR_PIN)
-    {
-        s_pir_cnt++;
-        s_pir_lvl = (uint8_t)HAL_GPIO_ReadPin(FLAME_GPIO_PORT, PIR_PIN);
-    }
+    s_flame_cnt++;
+    s_flame_lvl = (uint8_t)HAL_GPIO_ReadPin(FLAME_GPIO_PORT, FLAME_PIN);
+}
+void bsp_pir_irq_update(void)
+{
+    s_pir_cnt++;
+    s_pir_lvl = (uint8_t)HAL_GPIO_ReadPin(FLAME_GPIO_PORT, PIR_PIN);
 }

@@ -3,3 +3,49 @@ build*.log
 MDK-ARM/*.log
 MDK-ARM/Objects/
 MDK-ARM/Listings/
+
+# ══════════════════════════════════════════════════════════════
+# Keil 构建产物：真正落盘在 MDK-ARM/SmartKitchenEnvironmentMonitoringSystem/
+# 不是 MDK-ARM/Objects/，所以两条路径都要挡
+# ══════════════════════════════════════════════════════════════
+MDK-ARM/SmartKitchenEnvironmentMonitoringSystem/
+*.o
+*.d
+*.axf
+*.hex
+*.map
+*.lnp
+*.dep
+*.crf
+*.lst
+*.htm
+*.__i
+*._ia
+
+# Keil 个人窗口布局，含本机绝对路径，换机器就没用
+*.uvguix.*
+
+# ══════════════════════════════════════════════════════════════
+# LVGL 官方示例（不参与编译）
+# 只留 examples/porting/：lv_port_indev.c 手改了触摸坐标 (x=319-p->y)
+# 其余 anim/arduino/event/get_started/scroll/styles/widgets/
+#       assets/libs/layouts/others 全挡，加起来 67MB
+# ══════════════════════════════════════════════════════════════
+LVGL_CUT/demos/
+LVGL_CUT/examples/*
+!/LVGL_CUT/examples/porting/
+
+# ══════════════════════════════════════════════════════════════
+# SquareLine Studio 缓存与自动备份（工程本体 .spj/.sll/assets 保留）
+# ══════════════════════════════════════════════════════════════
+SquareLinestidos/cache/
+SquareLinestidos/backup/
+
+# ══════════════════════════════════════════════════════════════
+# 杂项
+# ══════════════════════════════════════════════════════════════
+*.tmp
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
